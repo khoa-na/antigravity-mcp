@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "antigravity-mcp"
+version = "2.0.0"
+description = "Pure Python MCP server exposing Google Antigravity (Gemini 3.7 Flash / Gemini 3.1 Pro) to Codex CLI, Claude Code, and MCP environments."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Laimusp"},
+    {name = "Antigravity Community"}
+]
+keywords = ["mcp", "model-context-protocol", "antigravity", "gemini", "claude-code", "codex"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+]
+dependencies = [
+    "mcp>=2.0.0",
+    "requests>=2.28.0",
+]
+
+[project.scripts]
+antigravity-mcp = "server:main"
+
+[tool.setuptools]
+py-modules = ["server", "agy_agent", "agy_backend"]

@@ -1,0 +1,25 @@
+.antigravity/
+node_modules/
+__pycache__/
+*.pyc
+*.log
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# local dev/test scratch
+_*.mjs
+_*.py
+_*.txt
+
+# local backups / probe scripts — never commit
+*.bak
+*.bak-*
+*probe*.py
+
+# never commit anything token/secret-shaped
+*oauth*
+*secret*
+*token*.json
+antigravity_oauth.json
