@@ -1,6 +1,6 @@
 # antigravity-mcp (Pure Python Edition)
 
-An MCP (Model Context Protocol) server that exposes the **Google Antigravity (Gemini 3.7 Flash / Gemini 3.1 Pro)** coding **agent** to **Codex CLI**, **Claude Code**, and any MCP-compatible AI environment.
+An MCP (Model Context Protocol) server that exposes the **Google Antigravity (Gemini 3.8 Flash / Gemini 3.1 Pro)** coding **agent** to **Codex CLI**, **Claude Code**, and any MCP-compatible AI environment.
 
 > **A real coding agent, not just an LLM API.** `ask-antigravity` / `ask-gemini` invoke the actual `agy` CLI agent, equipped with **Read / Write / Bash tools**. It can read files, inspect repositories, run commands, and modify code directly. By default, it operates in the directory from which the caller runs (`--add-dir`), seeing the codebase just like Codex.
 
@@ -9,7 +9,7 @@ An MCP (Model Context Protocol) server that exposes the **Google Antigravity (Ge
 ## What's New in Pure Python Edition
 
 1. **Pure Python Architecture**: Eliminated Node.js (`npm`, `node_modules`, `src/index.js`). Runs directly with Python and the official `mcp` SDK.
-2. **Modern Model Support**: Defaulted to high-performance **Gemini 3.7 Flash** (`gemini-3.7-flash-high`) for blazing-fast speed and low cost, with full support for **Gemini 3.1 Pro** (`gemini-3.1-pro-high`).
+2. **Modern Model Support**: Defaulted to high-performance **Gemini 3.8 Flash** (`gemini-3.8-flash-high`) for blazing-fast speed and low cost, with full support for **Gemini 3.1 Pro** (`gemini-3.1-pro-high`).
 3. **Session & Multi-Turn Support**: Added `conversation_id` parameter to continue and resume ongoing agent workflows (`agy --conversation <ID>`).
 4. **Standardized English Prompting**: Replaced hardcoded foreign wrappers with clear, robust task prompts that prevent agent execution stalls.
 5. **Keep-Alive & Telemetry**: Built-in background progress loop prevents caller timeouts during long reasoning tasks.
@@ -46,7 +46,7 @@ Codex CLI / Claude Code
 
 ### 2. Installation
 ```powershell
-git clone https://github.com/Laimusp/antigravity-mcp.git
+git clone https://github.com/khoa-na/antigravity-mcp.git
 cd antigravity-mcp
 pip install -r requirements.txt
 ```
