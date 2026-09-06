@@ -1,6 +1,7 @@
 import subprocess
 import json
 import sys
+from pathlib import Path
 
 for s in (sys.stdout, sys.stderr):
     if hasattr(s, "reconfigure"):
@@ -27,7 +28,7 @@ def wait_for_response(proc, req_id):
 
 print("=== STARTING MCP SERVER (server.py) ===")
 proc = subprocess.Popen(
-    [sys.executable, "D:/antigravity-mcp/server.py"],
+    [sys.executable, str(Path(__file__).resolve().with_name("server.py"))],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,

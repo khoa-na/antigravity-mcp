@@ -9,7 +9,8 @@ Mechanism:
     agy.exe -p "Read in.txt, execute the task, and write your final response to out.txt." --dangerously-skip-permissions
     out.txt --> returned to caller
 """
-import sys, os, time, tempfile, shutil, subprocess, argparse
+import sys, os, time, tempfile, shutil, subprocess, argparse, threading, math
+from functools import wraps
 from pathlib import Path
 
 for _s in (sys.stdout, sys.stderr):
@@ -44,6 +45,31 @@ MAX_SWAPS = int(os.environ.get("AGY_MAX_SWAPS", "3"))
 MAX_AUTH_REFRESHES = int(os.environ.get("AGY_MAX_AUTH_REFRESHES", "1"))
 DEFAULT_MODEL = os.environ.get("AGY_MODEL", "gemini-3.8-flash-high")
 
+
+class AgentError(RuntimeError):
+    def __init__(self, message, status="failed", exit_code=None, output=""):
+        super().__init__(message)
+        self.status = status
+        self.exit_code = exit_code
+        self.output = output
+
+
+# ponytail: serialize CLI tasks in this server because credentials/profile are shared.
+# Use separate authenticated processes/worktrees if parallel execution is needed.
+_AGENT_LOCK = threading.RLock()
+
+
+def _exclusive_agent(func):
+    @wraps(func)
+    def guarded(*args, **kwargs):
+        if not _AGENT_LOCK.acquire(blocking=False):
+            raise AgentError("Another agent task is running in this server; retry after it finishes", status="busy")
+        try:
+            return func(*args, **kwargs)
+        finally:
+            _AGENT_LOCK.release()
+    return guarded
+
 _QUOTA_MARKERS = (
     "resource_exhausted", "resource has been exhausted", "quota",
     "rate limit", "rate_limit", "too many requests", "exhausted", "429"
@@ -69,13 +95,8 @@ def _env(worker_id=None):
     else:
         e.pop("CLOUD_CODE_URL", None)
     target_profile = PROFILE
-    if target_profile and worker_id:
-        target_profile = os.path.join(target_profile, f"worker_{worker_id}")
     if target_profile:
-        try:
-            os.makedirs(target_profile, exist_ok=True)
-        except Exception:
-            pass
+        os.makedirs(target_profile, exist_ok=True)
         e["USERPROFILE"] = target_profile
         e["HOME"] = target_profile
     e["PYTHONIOENCODING"] = "utf-8"
@@ -85,8 +106,13 @@ def _env(worker_id=None):
 _WRAP = "Read {infile}, execute the task, and write your final response to {outfile}."
 
 
+@_exclusive_agent
 def run_agent(prompt, model=None, workspace=None, resume=False, conversation_id=None, effort=None, worker_id=None, timeout=TIMEOUT):
     """Run agy CLI once. Returns (result_text, stdout, stderr, rc)."""
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be finite and positive")
+    if resume and conversation_id:
+        raise ValueError("Use resume OR conversation_id, not both")
     tmp = tempfile.mkdtemp(prefix="agymcp_")
     infile = os.path.join(tmp, "in.txt")
     outfile = os.path.join(tmp, "out.txt")
@@ -126,19 +152,20 @@ def run_agent(prompt, model=None, workspace=None, resume=False, conversation_id=
         except Exception:
             result = ""
 
-        # Fallback to stdout if out.txt missing but process succeeded
-        if not result and rc == 0 and out.strip():
-            clean_out = out.strip()
-            lines = [line for line in clean_out.splitlines() if not line.startswith("Task completed. The answer has been written to")]
-            result = "\n".join(lines).strip()
-
+        # stdout can contain only CLI logs. The requested out-file is the response contract.
         return result, out, err, rc
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def ask(prompt, model=None, system=None, workspace=None, resume=False, conversation_id=None, effort=None, worker_id=None):
+@_exclusive_agent
+def ask(prompt, model=None, system=None, workspace=None, resume=False, conversation_id=None, effort=None, worker_id=None, timeout=TIMEOUT):
     """Run the agent with proactive + reactive account rotation."""
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be finite and positive")
+    if resume and conversation_id:
+        raise ValueError("Use resume OR conversation_id, not both")
+    deadline = time.monotonic() + timeout
     model = model or DEFAULT_MODEL
     if system and system.strip():
         prompt = f"[SYSTEM INSTRUCTION]\n{system.strip()}\n\n[TASK]\n{prompt}"
@@ -158,13 +185,18 @@ def ask(prompt, model=None, system=None, workspace=None, resume=False, conversat
     auth_refreshes = 0
     last = ""
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AgentError("agy agent task deadline exceeded", status="timed_out")
         result, out, err, rc = run_agent(
             prompt, model=model, workspace=workspace,
             resume=resume, conversation_id=conversation_id, effort=effort,
-            worker_id=worker_id
+            worker_id=worker_id, timeout=remaining
         )
-        if result:
+        if result and rc == 0:
             return result
+        if result:
+            raise AgentError(f"agy agent returned partial output (rc={rc}): {err[-300:]}", status="partial", exit_code=rc, output=result)
 
         blob = ((err or "") + "\n" + (out or "")).lower()
         last = err or out or f"rc={rc}"
@@ -188,14 +220,14 @@ def ask(prompt, model=None, system=None, workspace=None, resume=False, conversat
                         continue
                 except Exception as e:
                     log(f"force-refresh failed: {e}")
-            raise RuntimeError(f"agy agent: auth required (login/token). {last[-300:]}")
+            raise AgentError(f"agy agent: auth required (login/token). {last[-300:]}", exit_code=rc)
 
         if err == "timeout":
-            raise RuntimeError(f"agy agent timed out after {TIMEOUT}s")
+            raise AgentError(f"agy agent timed out after {timeout}s", status="timed_out", exit_code=rc)
         if any(m in blob for m in _LAUNCH_MARKERS):
-            raise RuntimeError(f"agy agent could not launch: {last[-300:]}")
+            raise AgentError(f"agy agent could not launch: {last[-300:]}", exit_code=rc)
 
-        raise RuntimeError(f"agy agent produced no out-file (rc={rc}): {last[-400:] or 'empty stderr'}")
+        raise AgentError(f"agy agent produced no out-file (rc={rc}): {last[-400:] or 'empty stderr'}", exit_code=rc)
 
 
 def main():

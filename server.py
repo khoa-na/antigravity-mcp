@@ -7,14 +7,14 @@ to Google Antigravity coding agents with full Read/Write/Bash capabilities.
 
 Upgrades in v2.1:
 1. Pure Python Architecture (FastMCP / MCPServer).
-2. Multi-Agent Swarm Concurrency (Dynamic worker_id isolation).
+2. Stable CLI profiles and explicit conversation resumption.
 3. Specialized Tools:
    - ask-antigravity / ask-gemini (general agent)
    - review-diff (automated git diff review)
    - check-quota (live quota percentages for all models)
    - generate-tests (targeted unit test generator)
    - list-models & ping
-4. Real-time Telemetry (log-tailing progress updates).
+4. Periodic elapsed-time heartbeat (not execution progress).
 5. Output Artifact Management (context preservation on large outputs).
 """
 import sys
@@ -56,14 +56,13 @@ DEFAULT_MAX_INLINE_CHARS = int(os.environ.get("AGY_MAX_INLINE_CHARS", "16000"))
 
 
 def resolve_workspace(w: str | None = None) -> str | None:
-    if w is None:
-        return DEFAULT_WORKSPACE or None
-    t = str(w).strip()
-    if not t:
-        return DEFAULT_WORKSPACE or None
-    if t.lower() in WS_OPT_OUT:
+    t = str(w or "").strip() or str(DEFAULT_WORKSPACE or "").strip()
+    if not t or t.lower() in WS_OPT_OUT:
         return None
-    return t
+    path = Path(t).expanduser().resolve()
+    if not path.is_dir():
+        raise ValueError(f"Workspace is not an existing directory: {path}")
+    return str(path)
 
 
 def strip_bom(s: str) -> str:
@@ -124,14 +123,14 @@ def handle_large_output(
         out_file.write_text(text, encoding="utf-8")
 
         preview_lines = lines[:40]
-        preview_text = "\n".join(preview_lines)
+        preview_text = "\n".join(preview_lines)[:min(max_chars, 4000) if max_chars > 0 else 4000]
         return (
             f"[Response exceeds threshold ({len(lines)} lines / {len(text)} chars). "
             f"Full content saved to artifact]\n"
             f"Artifact File: {out_file.as_posix()}\n\n"
             f"--- Preview (First 40 lines) ---\n"
             f"{preview_text}\n"
-            f"\n... [{len(lines) - 40} lines truncated. See artifact file for full output] ..."
+            "\n... [See artifact file for full output] ..."
         )
     except Exception as e:
         # Fallback to inline if saving artifact fails
@@ -140,7 +139,7 @@ def handle_large_output(
 
 
 async def _run_with_telemetry(func, ctx: Context | None = None, label: str = "Antigravity"):
-    """Run a blocking function in a worker thread while streaming real-time telemetry from agy logs."""
+    """Run blocking work with elapsed-time heartbeats, not measured progress."""
     stop_event = asyncio.Event()
     start_time = time.time()
 
@@ -188,12 +187,14 @@ async def ask_antigravity(
     cleanup: bool = False,
     save_artifact: bool = False,
     ctx: Context = None,
+    result_format: str = "text",
+    timeout: float = agy_agent.TIMEOUT,
 ) -> str:
     """Ask the Google Antigravity AGENT (Gemini 3.8 Flash / Pro) — a coding agent WITH
     file tools (Read/Write/Bash), like a second Claude Code / Codex.
 
     By default it works in the current directory (process workspace), so it can read and
-    run your repo like Codex. Supports parallel multi-agent swarm execution and one-click session resume.
+    run your repo like Codex. Pass an existing conversation ID for explicit resumption.
 
     Parameters:
     - prompt: The task/code instruction.
@@ -202,11 +203,13 @@ async def ask_antigravity(
     - model: Model ID (default: gemini-3.8-flash-high, or gemini-3.1-pro-high, etc.).
     - system: Optional system instructions.
     - system_file: Absolute path to a file containing system instructions.
-    - workspace: Directory granted to the agent via --add-dir (read+write). Default: current directory. Pass 'none' for isolated temp dir.
+    - workspace: Directory granted via --add-dir. 'none' omits this grant; it is NOT a security sandbox.
     - conversation_id: Resume/continue an existing session by conversation ID.
     - effort: Reasoning effort (low, medium, high).
     - cleanup: If true, delete prompt_file / system_file after execution.
     - save_artifact: If true, always saves response to an artifact file in .antigravity/artifacts/.
+    - result_format: 'text' (compatible default) or 'json' for execution metadata. Success is NOT verification of the code.
+    - timeout: Total agent time budget in seconds, shared across retries.
     """
     resolved_prompt, resolved_system, cleanup_files = resolve_input(
         prompt=prompt, prompt_file=prompt_file,
@@ -215,10 +218,17 @@ async def ask_antigravity(
     )
     if not resolved_prompt or not resolved_prompt.strip():
         raise ValueError("Prompt is required — pass `prompt` or a non-empty `prompt_file`")
+    if resume and conversation_id:
+        raise ValueError("Use resume OR conversation_id, not both")
+    if result_format not in {"text", "json"}:
+        raise ValueError("result_format must be text or json")
+    if not 0 < timeout <= 86400:
+        raise ValueError("timeout must be between 0 and 86400 seconds")
 
     ws = resolve_workspace(workspace)
     worker_id = uuid.uuid4().hex[:6]
-    session_conv_id = None if resume else (conversation_id or f"sess_{worker_id}_{uuid.uuid4().hex[:4]}")
+    session_conv_id = conversation_id
+    started = time.monotonic()
 
     try:
         def _execute():
@@ -230,10 +240,31 @@ async def ask_antigravity(
                 resume=resume,
                 conversation_id=session_conv_id,
                 effort=effort,
-                worker_id=worker_id
+                worker_id=worker_id, timeout=timeout
             )
-        raw_result = await _run_with_telemetry(_execute, ctx, label=f"Worker-{worker_id}")
+        error = None
+        try:
+            raw_result = await _run_with_telemetry(_execute, ctx, label=f"Worker-{worker_id}")
+        except agy_agent.AgentError as exc:
+            if result_format == "text":
+                raise
+            error = exc
+            raw_result = exc.output
         formatted = handle_large_output(raw_result, ws, force_artifact=save_artifact)
+        if result_format == "json":
+            return json.dumps({
+                "status": error.status if error else "succeeded",
+                "task_id": worker_id,
+                "conversation_id": session_conv_id,
+                "resume_latest": resume,
+                "workspace": ws,
+                "model": model or agy_agent.DEFAULT_MODEL,
+                "exit_code": error.exit_code if error else 0,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "verification": "not_run_by_wrapper",
+                "response": formatted,
+                "error": str(error) if error else None,
+            }, ensure_ascii=False)
         return f"Antigravity ({model or agy_agent.DEFAULT_MODEL}) response:\n{formatted}"
     finally:
         for cf in cleanup_files:
@@ -257,13 +288,15 @@ async def ask_gemini(
     cleanup: bool = False,
     save_artifact: bool = False,
     ctx: Context = None,
+    result_format: str = "text",
+    timeout: float = agy_agent.TIMEOUT,
 ) -> str:
     """Alias for ask-antigravity."""
     return await ask_antigravity(
         prompt=prompt, resume=resume, prompt_file=prompt_file, model=model,
         system=system, system_file=system_file, workspace=workspace,
         conversation_id=conversation_id, effort=effort, cleanup=cleanup,
-        save_artifact=save_artifact, ctx=ctx
+        save_artifact=save_artifact, ctx=ctx, result_format=result_format, timeout=timeout
     )
 
 
@@ -276,7 +309,7 @@ async def review_diff(
     ctx: Context = None
 ) -> str:
     """Perform an automated, structured code review on current uncommitted or staged git changes.
-    Runs in strictly read-only mode so it never modifies your repository files.
+    Sends only the diff to the text backend; does not launch a file-editing agent.
 
     Parameters:
     - workspace: Path to the git repository (default: current workspace).
@@ -290,22 +323,16 @@ async def review_diff(
     try:
         proc = subprocess.run(
             git_cmd, cwd=ws_dir, capture_output=True,
-            text=True, encoding="utf-8", errors="replace"
+            text=True, encoding="utf-8", errors="replace", timeout=30
         )
+        if proc.returncode != 0:
+            return f"Error executing git command (rc={proc.returncode}): {proc.stderr.strip()}"
         diff_text = proc.stdout.strip()
     except Exception as e:
         return f"Error executing git command: {e}"
 
     if not diff_text:
-        # Fallback to unstaged diff if git diff HEAD was empty
-        proc2 = subprocess.run(
-            ["git", "diff"], cwd=ws_dir, capture_output=True,
-            text=True, encoding="utf-8", errors="replace"
-        )
-        diff_text = proc2.stdout.strip()
-
-    if not diff_text:
-        return "No uncommitted git changes detected in the workspace."
+        return f"No {'staged' if staged else 'uncommitted tracked'} git changes detected in the workspace."
 
     focus_clause = f"Focus especially on: {focus}." if focus else "Check for bugs, security risks, performance regressions, and style."
     prompt = (
@@ -320,11 +347,10 @@ async def review_diff(
     )
 
     def _execute():
-        # Pass workspace="none" so the review agent is strictly read-only and cannot edit files
-        return agy_agent.ask(
+        # No CLI tools are exposed by the text-only backend.
+        return agy_backend.ask(
             prompt=prompt,
             model=model or agy_agent.DEFAULT_MODEL,
-            workspace=None,
             system="You are an expert code reviewer. Provide constructive, precise feedback."
         )
 
@@ -431,7 +457,9 @@ async def ping(prompt: str = "Reply with exactly one word: PONG", ctx: Context =
     """Health check — verifies that the Antigravity CLI or backend responds."""
     def _execute():
         res, out, err, rc = agy_agent.run_agent(prompt, model=agy_agent.DEFAULT_MODEL, timeout=30)
-        return res or out or "PONG"
+        if rc != 0 or not res.strip():
+            raise RuntimeError(f"Antigravity health check failed (rc={rc}): {err[-300:] or 'empty response'}")
+        return res
     return await _run_with_telemetry(_execute, ctx, label="Ping")
 
 

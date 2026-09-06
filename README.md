@@ -53,8 +53,12 @@ pip install -r requirements.txt
 
 ### 3. Verify Server
 ```powershell
-python -m unittest tests/test_server.py
+python -m unittest discover -s tests -v
 ```
+
+The test suite is offline: it mocks authentication, HTTP requests, and agent execution,
+and stores test artifacts in temporary directories. `run_demo.py` is a separate **live**
+demo that invokes the authenticated agent; it is not an offline test.
 
 ---
 
@@ -105,12 +109,60 @@ Executes tasks using the Google Antigravity coding agent.
 | `resume` | boolean | If true, automatically continues the most recent conversation session (`--continue`) without needing an ID. |
 | `prompt_file` | string | Absolute path to a file containing the prompt (ideal for large codebases or artifacts). |
 | `model` | string | Target model ID (default: `gemini-3.8-flash-high`, or `gemini-3.1-pro-high`). |
-| `workspace` | string | Directory granted to the agent via `--add-dir`. Default: current working directory. Set to `"none"` for temp-only isolation. |
+| `workspace` | string | Existing directory granted via `--add-dir`, normalized to an absolute path. Default: server working directory. `"none"` omits the grant; it is **not a security sandbox**. |
 | `conversation_id` | string | Conversation ID to resume a specific historical session. |
 | `effort` | string | Reasoning effort (`low`, `medium`, `high`). |
 | `system` / `system_file` | string | System instructions (inline or file path). |
 | `cleanup` | boolean | Automatically delete `prompt_file` / `system_file` after execution. |
 | `save_artifact` | boolean | If true, saves full response to an artifact file in `.antigravity/artifacts/`. |
+| `result_format` | string | `"text"` (compatible default) or `"json"` for execution status and metadata. |
+| `timeout` | number | Positive agent time budget in seconds (maximum 86400), shared across CLI retries. Default: `AGY_AGENT_TIMEOUT`. |
+
+### Reliable handoff to a supervising agent
+
+Use `result_format="json"` when the caller needs machine-readable results. The tool
+returns a JSON **string**, not a separate MCP structured-content object. It includes
+`status`, `task_id`, `conversation_id`, `resume_latest`, `workspace`, `model`,
+`exit_code`, `elapsed_seconds`, `response`, `error`, and
+`verification="not_run_by_wrapper"`.
+
+- `succeeded` means the CLI exited with code 0 and wrote a non-empty response file.
+  It does **not** prove the requested code is correct or that tests passed.
+- `partial` preserves an answer written before a nonzero exit. It is not retried.
+- `failed`, `timed_out`, and `busy` are explicit failures. In text mode these raise
+  tool errors; in JSON mode they are returned as status records. Invalid inputs
+  still raise tool errors in either mode.
+- stdout-only CLI logs are no longer accepted as a successful answer.
+- The caller should send the task, file scope, constraints, and acceptance checks
+  in `prompt` or `prompt_file`, then independently inspect the diff and run tests.
+
+New calls no longer invent conversation IDs: `--conversation` resumes an **existing**
+CLI conversation. The result echoes an explicitly supplied `conversation_id`; otherwise
+it is `null` because this wrapper cannot yet discover the CLI-generated ID. A `task_id`
+is only a correlation label, not a resumable conversation. Use either an existing
+`conversation_id` or `resume=true`, not both. `resume=true` refers to the CLI's most
+recent conversation, not a workspace-specific session maintained by this server.
+
+`AGY_AGENT_PROFILE`, when set, is stable across calls; random worker subdirectories
+are no longer created. Authenticate that profile before using it. Calls into the CLI
+are serialized **within one server process**, including `ping`; overlapping calls fail
+with `busy`. This does not lock out another server process or a human editor. Avoid
+concurrent writers to the same checkout.
+
+The timeout budget starts before quota preflight and remaining time is passed to each
+CLI attempt. Already-running auth/quota/switcher calls retain their own timeouts;
+this is not a hard wall-clock deadline for all network operations. The 15-second
+heartbeat reports elapsed time only. Background jobs, cancellation of descendant
+processes, and durable task logs are not implemented yet. Quota/auth retries can
+replay a task when no response file exists; inspect the working tree after failures.
+
+**Security:** coding tools still invoke `agy --dangerously-skip-permissions`.
+Workspace selection and the in-process lock do not enforce filesystem confinement.
+Use a separately restricted environment for untrusted tasks. `review-diff` now uses
+the existing text-only HTTP backend, not the CLI, so it cannot execute file tools;
+it requires backend authentication/connectivity and does not fall back to the CLI.
+Staged review never includes unstaged changes. Git failures are reported explicitly,
+and untracked files are not part of the diff.
 
 ---
 
