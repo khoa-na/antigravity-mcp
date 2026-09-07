@@ -106,6 +106,19 @@ def _env(worker_id=None):
 _WRAP = "Read {infile}, execute the task, and write your final response to {outfile}."
 
 
+def _cli_print_timeout(timeout):
+    """Go-duration string within the outer budget, reserving up to 10s for exit/readback.
+
+    agy print mode otherwise has an independent 5-minute default. Recompute this
+    from each attempt's remaining budget, not the original request timeout.
+    """
+    reserve = min(10.0, timeout * 0.05)
+    nanoseconds = max(1, int((timeout - reserve) * 1_000_000_000))
+    seconds, fraction = divmod(nanoseconds, 1_000_000_000)
+    duration = f"{seconds}.{fraction:09d}".rstrip("0").rstrip(".")
+    return duration + "s"
+
+
 @_exclusive_agent
 def run_agent(prompt, model=None, workspace=None, resume=False, conversation_id=None, effort=None, worker_id=None, timeout=TIMEOUT):
     """Run agy CLI once. Returns (result_text, stdout, stderr, rc)."""
@@ -119,7 +132,8 @@ def run_agent(prompt, model=None, workspace=None, resume=False, conversation_id=
     try:
         Path(infile).write_text(prompt, encoding="utf-8")
         wrapped = _WRAP.format(infile=infile, outfile=outfile)
-        args = [AGY_EXE, "-p", wrapped, "--dangerously-skip-permissions"]
+        args = [AGY_EXE, "-p", wrapped, "--dangerously-skip-permissions",
+                "--print-timeout", _cli_print_timeout(timeout)]
         if model:
             args += ["--model", model]
         if workspace:
@@ -200,6 +214,11 @@ def ask(prompt, model=None, system=None, workspace=None, resume=False, conversat
 
         blob = ((err or "") + "\n" + (out or "")).lower()
         last = err or out or f"rc={rc}"
+
+        # The CLI may reach its own print deadline before Python's hard deadline.
+        if "timeout waiting for response" in blob:
+            raise AgentError(f"agy CLI print deadline reached: {last[-400:]}",
+                             status="timed_out", exit_code=rc)
 
         # Reactive: quota exhaustion
         if _HAS_ROTATION and swaps < MAX_SWAPS and any(m in blob for m in _QUOTA_MARKERS):

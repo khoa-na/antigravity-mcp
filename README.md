@@ -150,7 +150,18 @@ with `busy`. This does not lock out another server process or a human editor. Av
 concurrent writers to the same checkout.
 
 The timeout budget starts before quota preflight and remaining time is passed to each
-CLI attempt. Already-running auth/quota/switcher calls retain their own timeouts;
+CLI attempt. Each attempt explicitly sets `agy --print-timeout` from that remaining
+budget, reserving 5% (at most 10 seconds) for CLI exit and result collection. For
+example, a 600-second attempt uses `--print-timeout 590s`, rather than the CLI's
+independent default of 5 minutes. Python retains the original remaining budget as
+its hard subprocess timeout. CLI `timeout waiting for response` errors are reported
+as `timed_out`, not as a generic missing-output-file failure. Partial responses are
+still reported as `partial`, never as success.
+
+Restart/reconnect the MCP server after updating these files; an already-running
+Python process does not automatically reload the wrapper.
+
+Already-running auth/quota/switcher calls retain their own timeouts;
 this is not a hard wall-clock deadline for all network operations. The 15-second
 heartbeat reports elapsed time only. Background jobs, cancellation of descendant
 processes, and durable task logs are not implemented yet. Quota/auth retries can

@@ -107,6 +107,44 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(args[args.index("--conversation") + 1], "existing")
         self.assertNotIn("--continue", args)
 
+    def test_print_timeout_tracks_outer_budget_with_exit_margin(self):
+        proc = mock.Mock(returncode=0, stdout=b"", stderr=b"")
+        for budget, expected in ((900, "890s"), (600, "590s"), (30, "28.5s"),
+                                 (2, "1.9s"), (0.001, "0.00095s")):
+            with self.subTest(budget=budget), mock.patch.object(agy_agent.subprocess, "run", return_value=proc) as run:
+                agy_agent.run_agent("unused offline prompt", timeout=budget)
+                args = run.call_args.args[0]
+                self.assertEqual(args.count("--print-timeout"), 1)
+                self.assertEqual(args[args.index("--print-timeout") + 1], expected)
+                self.assertEqual(run.call_args.kwargs["timeout"], budget)
+
+    def test_cli_timeout_does_not_fall_back_to_no_outfile_error(self):
+        with mock.patch.object(agy_agent, "run_agent", return_value=("", "", "Error: timeout waiting for response", 1)):
+            with self.assertRaises(agy_agent.AgentError) as caught:
+                agy_agent.ask("unused", timeout=600)
+        self.assertEqual(caught.exception.status, "timed_out")
+        self.assertEqual(caught.exception.exit_code, 1)
+        self.assertIn("CLI print deadline", str(caught.exception))
+
+    def test_retry_print_timeout_uses_remaining_not_original_budget(self):
+        calls = []
+        def fake_run(args, **kwargs):
+            calls.append((args, kwargs))
+            if len(calls) == 1:
+                return mock.Mock(returncode=1, stdout=b"", stderr=b"429 quota exhausted")
+            from pathlib import Path
+            Path(kwargs["cwd"], "out.txt").write_text("done", encoding="utf-8")
+            return mock.Mock(returncode=0, stdout=b"", stderr=b"")
+        with mock.patch.object(agy_agent, "_HAS_ROTATION", True), \
+             mock.patch.object(agy_agent, "load_config", return_value={"enabled": False}), \
+             mock.patch.object(agy_agent, "swap_account", return_value=True), \
+             mock.patch.object(agy_agent.time, "sleep"), \
+             mock.patch.object(agy_agent.time, "monotonic", side_effect=[0, 10, 500]), \
+             mock.patch.object(agy_agent.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(agy_agent.ask("unused", timeout=600), "done")
+        self.assertEqual([args[args.index("--print-timeout") + 1] for args, _ in calls], ["580s", "95s"])
+        self.assertEqual([kw["timeout"] for _, kw in calls], [590, 100])
+
 
 if __name__ == "__main__":
     unittest.main()
