@@ -18,14 +18,17 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
-    "mcp>=2.0.0",
+    "mcp>=2.0.0,<3",
+    "anyio>=4.5,<5",
     "requests>=2.28.0",
 ]
 
 [project.scripts]
 antigravity-mcp = "server:main"
+antigravity-doctor = "doctor:main"
 
 [tool.setuptools]
-py-modules = ["server", "agy_agent", "agy_backend"]
+py-modules = ["server", "agy_agent", "agy_backend", "doctor"]

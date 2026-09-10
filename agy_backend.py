@@ -110,11 +110,14 @@ else:
 
 
 def cred_read(target):
+    token = os.environ.get("AGY_ACCESS_TOKEN")
+    if token:
+        return {"token": {"access_token": token, "refresh_token": os.environ.get("AGY_REFRESH_TOKEN", ""),
+                          "expiry": os.environ.get("AGY_TOKEN_EXPIRY", "")}}, "antigravity"
     if not _advapi or not _CRED:
-        token = os.environ.get("AGY_ACCESS_TOKEN")
-        if token:
-            return {"token": {"access_token": token, "refresh_token": os.environ.get("AGY_REFRESH_TOKEN", ""), "expiry": ""}}, "antigravity"
-        raise OSError("Windows Credential Manager is only supported on Windows. Set AGY_ACCESS_TOKEN on Linux/macOS.")
+        raise OSError("HTTP backend authentication is not configured. Set AGY_ACCESS_TOKEN "
+                      "(and optionally AGY_REFRESH_TOKEN) on WSL/Linux/macOS. "
+                      "The native agy CLI login is separate from this backend.")
     ptr = ctypes.POINTER(_CRED)()
     if not _advapi.CredReadW(target, 1, 0, ctypes.byref(ptr)):
         raise OSError("CredRead(%s) failed: %s" % (target, ctypes.get_last_error()))
@@ -126,6 +129,13 @@ def cred_read(target):
 
 
 def cred_write(target, blob_obj, username="antigravity"):
+    if os.environ.get("AGY_ACCESS_TOKEN"):
+        # Keep refreshed environment credentials in this process only. Never copy
+        # explicitly supplied credentials into the Windows account's credential store.
+        token = blob_obj["token"]
+        os.environ["AGY_ACCESS_TOKEN"] = token["access_token"]
+        os.environ["AGY_TOKEN_EXPIRY"] = token.get("expiry", "")
+        return
     if not _advapi or not _CRED:
         log("cred_write skipped on non-Windows platform")
         return
@@ -164,12 +174,22 @@ class Session:
 
     def ensure_fresh(self, force=False):
         exp = _parse_expiry(self.blob["token"].get("expiry"))
+        if not self.blob["token"].get("refresh_token"):
+            if force or (exp and exp <= time.time()):
+                raise RuntimeError("Access token expired or refresh required; supply a new "
+                                   "AGY_ACCESS_TOKEN or configure AGY_REFRESH_TOKEN.")
+            # An access-token-only setup is valid. Let the API validate tokens
+            # whose expiry is unknown instead of sending an empty refresh token.
+            return
         if not force and exp and (exp - time.time()) > 120:
             return  # still valid for >2 min
         self.refresh()
 
     def refresh(self):
-        rt = self.blob["token"]["refresh_token"]
+        rt = self.blob["token"].get("refresh_token")
+        if not rt:
+            raise RuntimeError("Cannot refresh authentication: set AGY_REFRESH_TOKEN "
+                               "or replace AGY_ACCESS_TOKEN with a valid token.")
         log("refreshing antigravity token...")
         r = requests.post(OAUTH_TOKEN_URL, data={
             "client_id": AGY_CLIENT_ID, "client_secret": AGY_CLIENT_SECRET,
@@ -184,7 +204,7 @@ class Session:
         self.blob["token"]["expiry"] = datetime.fromtimestamp(new_exp, tz=exp_dt.tzinfo).isoformat()
         try:
             cred_write(CRED_TARGET, self.blob, self.cred_user)  # share fresh token with the real CLI
-            log("token refreshed + written back to Credential Manager")
+            log("token refreshed; credential source updated")
         except Exception as e:
             log("token refreshed (write-back failed, non-fatal):", e)
         return True

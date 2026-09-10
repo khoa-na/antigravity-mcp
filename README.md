@@ -40,9 +40,51 @@ Codex CLI / Claude Code
 ## Quick Start
 
 ### 1. Requirements
-- **Windows** (uses Windows Credential Manager for Google Antigravity OAuth tokens).
+- **Windows, Linux, or WSL2** (see WSL setup below; backend authentication differs by platform).
 - **Python 3.10+**.
 - **Google Antigravity CLI (`agy`)** installed and authenticated at least once (`cmdkey /list:gemini:antigravity`).
+
+### WSL2 / Linux setup
+
+Use a native Linux `agy` installation and authenticate it inside WSL. The wrapper
+discovers `agy` on `PATH`; `AGY_EXE` can override it. A Windows `agy.exe` is not a
+drop-in replacement: prompts and workspace grants use Linux paths.
+
+```bash
+# Install your distribution's python3-venv package first if venv is unavailable.
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python doctor.py
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python server.py --models
+```
+
+`doctor.py` uses only the Python standard library and works before dependencies
+are installed. It checks dependency presence, executable discovery and auth
+configuration without reading credential stores, calling APIs or running an agent.
+Its exit code checks dependencies and CLI availability, not authentication validity.
+
+There are two independent authentication paths:
+
+- `ask-antigravity`, `ask-gemini`, `generate-tests` and `ping` use the native CLI's
+  login. They do not require HTTP backend tokens. Set `AGY_PROACTIVE=0` to skip the
+  optional backend quota preflight when using only CLI tools.
+- `review-diff` and `check-quota` use the HTTP backend. On WSL/Linux, supply
+  `AGY_ACCESS_TOKEN` through your local environment or secret manager. Optionally
+  supply `AGY_REFRESH_TOKEN` and `AGY_TOKEN_EXPIRY` (ISO 8601). Access-token-only
+  mode works until the token expires; replace it when authentication fails.
+  Refreshed environment tokens are retained only in the running server process,
+  not persisted to disk or the parent shell. Windows credentials are not imported
+  automatically into WSL. Do not put token values in the repository.
+
+Automatic account rotation is optional and requires the separate account manager's
+`agy_switch.py`, configured via `AGY_SWITCH_SCRIPT`. This repository does not ship
+that script. Missing rotation support does not prevent a successful CLI call.
+
+After setup, use the absolute `.venv/bin/python` path to launch `server.py` in your
+MCP client. To check live CLI connectivity explicitly, run
+`.venv/bin/python server.py --ping`; unlike the offline checks, this invokes the
+authenticated agent and may consume quota.
 
 ### 2. Installation
 ```powershell
@@ -239,7 +281,7 @@ Standardized prompt templates ready for one-click use in Claude, Cursor, and Cod
 | `AGY_MODEL` | `gemini-3.8-flash-high` | Default model ID used by the agent. |
 | `AGY_EXE` | Auto-detected | Explicit path to `agy.exe`. |
 | `AGY_AGENT_TIMEOUT` | `900` | Timeout in seconds before terminating long runs. |
-| `AGY_DEFAULT_WORKSPACE` | `process.cwd()` | Default workspace granted to the agent. Set to `"none"` to isolate. |
+| `AGY_DEFAULT_WORKSPACE` | Server working directory | Default workspace granted to the agent. `"none"` omits the grant; it does not isolate filesystem access. |
 | `CLOUD_CODE_URL` | None | Set only if using a custom local unlock proxy. |
 
 ---

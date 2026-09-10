@@ -31,9 +31,9 @@ except Exception as _e:
 
 def _default_agy_exe():
     win = os.path.join(os.environ.get("LOCALAPPDATA", ""), "agy", "bin", "agy.exe")
-    if os.environ.get("LOCALAPPDATA") and os.path.exists(win):
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA") and os.path.exists(win):
         return win
-    return shutil.which("agy") or win
+    return shutil.which("agy") or (win if sys.platform == "win32" else "agy")
 
 
 AGY_EXE = os.environ.get("AGY_EXE") or _default_agy_exe()
@@ -157,7 +157,7 @@ def run_agent(prompt, model=None, workspace=None, resume=False, conversation_id=
         except subprocess.TimeoutExpired:
             return "", "", "timeout", -1
         except (FileNotFoundError, NotADirectoryError, OSError) as e:
-            return "", "", f"agy.exe not launchable ({AGY_EXE}): {e}", -1
+            return "", "", f"agy CLI not launchable ({AGY_EXE}): {e}", -1
 
         result = ""
         try:
