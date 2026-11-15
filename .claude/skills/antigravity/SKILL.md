@@ -13,6 +13,10 @@ hooks:
           command: |
             input=$(cat)
             case "$input" in
+              *"agy -p"*) ;;
+              *) exit 0 ;;
+            esac
+            case "$input" in
               *"--print-timeout"*) ;;
               *) echo "agy -p needs --print-timeout (its default, 0, waits forever). Add e.g. --print-timeout 900s and retry." >&2; exit 2 ;;
             esac
@@ -29,6 +33,10 @@ hooks:
           command: |
             input=$(cat)
             case "$input" in
+              *"agy -p"*) ;;
+              *) exit 0 ;;
+            esac
+            case "$input" in
               *'\"/quota\"'*|*'\"/usage\"'*|*"'/quota'"*|*"'/usage'"*) exit 0 ;;
             esac
             if printf '%s' "$input" | grep -Eq '"run_in_background"[[:space:]]*:[[:space:]]*true'; then
@@ -43,6 +51,11 @@ hooks:
           if: "Bash(agy -p *)"
           shell: bash
           command: |
+            input=$(cat)
+            case "$input" in
+              *"agy -p"*) ;;
+              *) exit 0 ;;
+            esac
             printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUseFailure","additionalContext":"agy did NOT succeed (error, print timeout or killed): the JSON on stdout says which. It may have edited files before stopping, so inspect git status and git diff in the target repo before retrying or reporting."}}'
 ---
 
