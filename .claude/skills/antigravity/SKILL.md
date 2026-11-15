@@ -43,7 +43,7 @@ Task from the user: $ARGUMENTS
 ```bash
 antigravity-doctor
 ```
-Needs `pip install -e <this repo>` (provides `antigravity-agent`, `antigravity-doctor`) and a
+Needs `pip install -e <this repo>` (provides `antigravity-agent`, `antigravity-agent-hook`, `antigravity-doctor`) and a
 logged-in `agy` CLI. If a command is not found, say so and stop; do not guess a path.
 
 ## Brief the agent
@@ -52,6 +52,9 @@ Write the prompt to a file (long prompts break shell quoting) and include:
 2. Exact files/dirs it may touch, and files it must not touch.
 3. Constraints (style, no new dependencies, no commits, no network).
 4. Acceptance checks it should run itself (e.g. the test command).
+
+Ready-made templates (TDD, review, security audit, test generation) are in
+[references/prompts.md](references/prompts.md).
 
 ## Run it
 Always pass `--timeout` and `--json` (a hook blocks the call otherwise). A status other than
@@ -87,6 +90,18 @@ Stdout is one JSON object. Exit code is 0 only for `succeeded`.
 `response` may be a preview if the reply was large; the full text path is in it.
 `conversation_id` is the ID the CLI created or continued (it can be `null` only if the CLI printed
 none). Keep it if you may need a follow-up.
+
+## Other commands (no agent run, no `--timeout`/`--json` needed)
+```bash
+antigravity-agent --models                 # models the CLI offers (live `agy models`)
+antigravity-agent --review "security"      # read-only review of `git diff HEAD`; add --staged
+antigravity-agent --quota                  # remaining quota per model
+```
+`--review` and `--quota` use the HTTP backend, not the agent: `--review` sends only the diff to
+a text-only model, so it **cannot edit files**. They need backend auth (Windows credential
+store, or `AGY_ACCESS_TOKEN` on WSL/Linux) and exit 1 with a message if it is missing.
+For a quick connectivity check run a tiny task:
+`antigravity-agent --json --timeout 120 --workspace none "Reply with exactly: PONG"`.
 
 ## Follow-ups
 - Prefer `--conversation <conversation_id>` using the ID from the previous result. It is exact

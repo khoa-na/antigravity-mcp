@@ -39,9 +39,17 @@ def _has_flag(command, flag):
     return re.search(rf"(^|\s){re.escape(flag)}(\s|=|$)", command) is not None
 
 
+# Read-only side commands and help never start the agent, so they need no guard or summary.
+_SIDE_FLAGS = ("--help", "-h", "--models", "--quota", "--review")
+
+
+def _not_a_task(command):
+    return not _CALL.search(command) or any(_has_flag(command, f) for f in _SIDE_FLAGS)
+
+
 def pre(event):
     command = _command(event)
-    if not _CALL.search(command) or _has_flag(command, "--help") or _has_flag(command, "-h"):
+    if _not_a_task(command):
         return 0
     missing = [f for f in ("--timeout", "--json") if not _has_flag(command, f)]
     if not missing:
@@ -64,7 +72,7 @@ def _git(args, cwd):
 
 def post(event):
     command = _command(event)
-    if not _CALL.search(command) or _has_flag(command, "--help") or _has_flag(command, "-h"):
+    if _not_a_task(command):
         return 0
     failed = event.get("hook_event_name") == "PostToolUseFailure"
     tool_input = event.get("tool_input") or {}

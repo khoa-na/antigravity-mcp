@@ -14,7 +14,7 @@ def diagnose():
         candidate = Path(os.environ.get("LOCALAPPDATA", "")) / "agy/bin/agy.exe"
         executable = str(candidate) if candidate.is_file() else None
     dependencies = {name: importlib.util.find_spec(name) is not None
-                    for name in ("mcp", "anyio", "requests")}
+                    for name in ("requests",)}
     switcher = os.environ.get("AGY_SWITCH_SCRIPT") or str(
         Path(__file__).resolve().parent.parent / "antigravity-auth-manager/agy_switch.py")
     return {
@@ -22,7 +22,7 @@ def diagnose():
         "wsl": "microsoft" in platform.release().lower(),
         "python": sys.version.split()[0],
         "dependencies": dependencies,
-        "server_dependencies_ready": all(dependencies.values()),
+        "dependencies_ready": all(dependencies.values()),
         "agy_executable": executable,
         "agy_executable_found": bool(executable and shutil.which(executable)),
         "cli_authentication": "not_checked; authenticate native agy separately",
@@ -38,7 +38,7 @@ def diagnose():
 def main():
     result = diagnose()
     print(json.dumps(result, indent=2))
-    return 0 if result["server_dependencies_ready"] and result["agy_executable_found"] else 1
+    return 0 if result["dependencies_ready"] and result["agy_executable_found"] else 1
 
 
 if __name__ == "__main__":

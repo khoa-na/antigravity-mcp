@@ -1,335 +1,166 @@
-# antigravity-mcp (Pure Python Edition)
+# antigravity-agent
 
-An MCP (Model Context Protocol) server that exposes the **Google Antigravity (Gemini 3.8 Flash / Gemini 3.1 Pro)** coding **agent** to **Codex CLI**, **Claude Code**, and any MCP-compatible AI environment.
+A **skill + CLI** that lets Claude Code (or any harness with a shell tool) delegate a coding
+task to the **Google Antigravity agent** (Gemini 3.x via the `agy` CLI). It is a real coding
+agent with Read / Write / Bash tools, not just an LLM API: it reads files, runs commands and
+edits the workspace you grant it.
 
-> **A real coding agent, not just an LLM API.** `ask-antigravity` / `ask-gemini` invoke the actual `agy` CLI agent, equipped with **Read / Write / Bash tools**. It can read files, inspect repositories, run commands, and modify code directly. By default, it operates in the directory from which the caller runs (`--add-dir`), seeing the codebase just like Codex.
-
----
-
-## What's New in Pure Python Edition
-
-1. **Pure Python Architecture**: Eliminated Node.js (`npm`, `node_modules`, `src/index.js`). Runs directly with Python and the official `mcp` SDK.
-2. **Modern Model Support**: Defaulted to high-performance **Gemini 3.8 Flash** (`gemini-3.8-flash-high`) for blazing-fast speed and low cost, with full support for **Gemini 3.1 Pro** (`gemini-3.1-pro-high`).
-3. **Session & Multi-Turn Support**: Added `conversation_id` parameter to continue and resume ongoing agent workflows (`agy --conversation <ID>`).
-4. **Standardized English Prompting**: Replaced hardcoded foreign wrappers with clear, robust task prompts that prevent agent execution stalls.
-5. **Keep-Alive & Telemetry**: Built-in background progress loop prevents caller timeouts during long reasoning tasks.
-
----
-
-## Architecture
+There is no server and no MCP configuration. The skill tells the host agent which command to
+run; the command prints one JSON record.
 
 ```text
-Codex CLI / Claude Code
-       │
-       ▼ (MCP stdio protocol)
-   server.py (Pure Python MCP Server)
-       │
-       ├─► ping ──────────────► Fast health-check
-       ├─► list-models ───────► Available Antigravity models
-       │
-       └─► ask-antigravity ───► agy_agent.py
-                                  │
-                                  ├─ File-in (temp in.txt)
-                                  ├─ agy.exe -p ... --dangerously-skip-permissions
-                                  ├─ Workspace granted (--add-dir <cwd>)
-                                  └─ File-out (temp out.txt)
+Claude Code ── /antigravity ──► SKILL.md ──► antigravity-agent (agy_agent.py)
+                                                 ├─ temp in.txt / out.txt
+                                                 ├─ agy -p ... --dangerously-skip-permissions
+                                                 ├─ cross-process lock + process-tree cleanup
+                                                 └─ one JSON result record on stdout
 ```
 
----
+## Install
 
-## Quick Start
-
-### 1. Requirements
-- **Windows, Linux, or WSL2** (see WSL setup below; backend authentication differs by platform).
-- **Python 3.10+**.
-- **Google Antigravity CLI (`agy`)** installed and authenticated at least once (`cmdkey /list:gemini:antigravity`).
-
-### WSL2 / Linux setup
-
-Use a native Linux `agy` installation and authenticate it inside WSL. The wrapper
-discovers `agy` on `PATH`; `AGY_EXE` can override it. A Windows `agy.exe` is not a
-drop-in replacement: prompts and workspace grants use Linux paths.
+Requirements: Windows, Linux or WSL2; Python 3.10+; the Antigravity CLI `agy`, logged in
+at least once.
 
 ```bash
-# Install your distribution's python3-venv package first if venv is unavailable.
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python doctor.py
-.venv/bin/python -m unittest discover -s tests -v
-.venv/bin/python server.py --models
-```
-
-`doctor.py` uses only the Python standard library and works before dependencies
-are installed. It checks dependency presence, executable discovery and auth
-configuration without reading credential stores, calling APIs or running an agent.
-Its exit code checks dependencies and CLI availability, not authentication validity.
-
-There are two independent authentication paths:
-
-- `ask-antigravity`, `ask-gemini`, `generate-tests` and `ping` use the native CLI's
-  login. They do not require HTTP backend tokens. Set `AGY_PROACTIVE=0` to skip the
-  optional backend quota preflight when using only CLI tools.
-- `review-diff` and `check-quota` use the HTTP backend. On WSL/Linux, supply
-  `AGY_ACCESS_TOKEN` through your local environment or secret manager. Optionally
-  supply `AGY_REFRESH_TOKEN` and `AGY_TOKEN_EXPIRY` (ISO 8601). Access-token-only
-  mode works until the token expires; replace it when authentication fails.
-  Refreshed environment tokens are retained only in the running server process,
-  not persisted to disk or the parent shell. Windows credentials are not imported
-  automatically into WSL. Do not put token values in the repository.
-
-Automatic account rotation is optional and requires the separate account manager's
-`agy_switch.py`, configured via `AGY_SWITCH_SCRIPT`. This repository does not ship
-that script. Missing rotation support does not prevent a successful CLI call.
-
-After setup, use the absolute `.venv/bin/python` path to launch `server.py` in your
-MCP client. To check live CLI connectivity explicitly, run
-`.venv/bin/python server.py --ping`; unlike the offline checks, this invokes the
-authenticated agent and may consume quota.
-
-### 2. Installation
-```powershell
 git clone https://github.com/khoa-na/antigravity-mcp.git
 cd antigravity-mcp
-pip install -r requirements.txt
-```
-
-### 3. Verify Server
-```powershell
+pip install -e .          # or: uv pip install -e .
+antigravity-doctor        # offline check; never reads credentials or runs the agent
 python -m unittest discover -s tests -v
 ```
 
-The test suite is offline: it mocks authentication, HTTP requests, and agent execution,
-and stores test artifacts in temporary directories. `run_demo.py` is a separate **live**
-demo that invokes the authenticated agent; it is not an offline test.
+This provides three commands on `PATH`: `antigravity-agent`, `antigravity-agent-hook`,
+`antigravity-doctor`.
 
----
+### Install the skill (Claude Code)
 
-## Client Configuration
+The skill lives in [`.claude/skills/antigravity/`](.claude/skills/antigravity/SKILL.md) and is
+picked up automatically inside this repo. To use it in every project, copy that folder to
+`~/.claude/skills/antigravity/`. Then say "ask Antigravity to ..." or type `/antigravity <task>`.
+Other harnesses that read `SKILL.md` can use the same folder; the `hooks:` frontmatter is a
+Claude Code feature, so elsewhere the skill's "always verify yourself" steps are the only
+safeguard.
 
-### Codex CLI Configuration
+### WSL2 / Linux
 
-Add to your Codex CLI configuration (`~/.codex/config.toml`):
+Use a native Linux `agy` installation and authenticate it inside WSL. `agy` is discovered on
+`PATH`; `AGY_EXE` overrides it. A Windows `agy.exe` is not a drop-in replacement (prompts and
+workspace grants use Linux paths).
 
-```toml
-[mcp_servers.antigravity]
-command = "python"
-args = ["D:/antigravity-mcp/server.py"]
-
-[mcp_servers.antigravity.env]
-AGY_MODEL = "gemini-3.7-flash-high"
+```bash
+python3 -m venv .venv && .venv/bin/python -m pip install -e .
+.venv/bin/antigravity-doctor
 ```
 
-### Claude Code Configuration
+## Usage
 
-Add to your `.claude.json`:
-
-```json
-{
-  "mcpServers": {
-    "antigravity": {
-      "type": "stdio",
-      "command": "python",
-      "args": ["D:\\antigravity-mcp\\server.py"],
-      "env": {
-        "AGY_MODEL": "gemini-3.8-flash-high"
-      }
-    }
-  }
-}
+```bash
+antigravity-agent --prompt-file task.md --workspace . --timeout 900 --json
 ```
 
----
-
-## Available MCP Tools
-
-### `ask-antigravity` / `ask-gemini`
-Executes tasks using the Google Antigravity coding agent.
-
-| Parameter | Type | Description |
-|---|---|---|
-| `prompt` | string | The task / question / code instruction. |
-| `resume` | boolean | If true, automatically continues the most recent conversation session (`--continue`) without needing an ID. |
-| `prompt_file` | string | Absolute path to a file containing the prompt (ideal for large codebases or artifacts). |
-| `model` | string | Target model ID (default: `gemini-3.8-flash-high`, or `gemini-3.1-pro-high`). |
-| `workspace` | string | Existing directory granted via `--add-dir`, normalized to an absolute path. Default: server working directory. `"none"` omits the grant; it is **not a security sandbox**. |
-| `conversation_id` | string | Conversation ID to resume a specific historical session. |
-| `effort` | string | Reasoning effort (`low`, `medium`, `high`). |
-| `system` / `system_file` | string | System instructions (inline or file path). |
-| `cleanup` | boolean | Automatically delete `prompt_file` / `system_file` after execution. |
-| `save_artifact` | boolean | If true, saves full response to an artifact file in `.antigravity/artifacts/`. |
-| `result_format` | string | `"text"` (compatible default) or `"json"` for execution status and metadata. |
-| `timeout` | number | Positive agent time budget in seconds (maximum 86400), shared across CLI retries. Default: `AGY_AGENT_TIMEOUT`. |
-
-### Reliable handoff to a supervising agent
-
-Use `result_format="json"` when the caller needs machine-readable results. The tool
-returns a JSON **string**, not a separate MCP structured-content object. It includes
-`status`, `task_id`, `conversation_id`, `resume_latest`, `workspace`, `model`,
-`exit_code`, `elapsed_seconds`, `response`, `error`, and
-`verification="not_run_by_wrapper"`.
-
-- `succeeded` means the CLI exited with code 0 and wrote a non-empty response file.
-  It does **not** prove the requested code is correct or that tests passed.
-- `partial` preserves an answer written before a nonzero exit. It is not retried.
-- `failed`, `timed_out`, and `busy` are explicit failures. In text mode these raise
-  tool errors; in JSON mode they are returned as status records. Invalid inputs
-  still raise tool errors in either mode.
-- stdout-only CLI logs are no longer accepted as a successful answer.
-- The caller should send the task, file scope, constraints, and acceptance checks
-  in `prompt` or `prompt_file`, then independently inspect the diff and run tests.
-
-New calls no longer invent conversation IDs: `--conversation` resumes an **existing**
-CLI conversation. Each run passes `--output-format json` to `agy` and reads the
-`conversation_id` it prints, so the result carries the ID of the conversation that was
-created or continued (also for `partial`/failed runs when the CLI printed one). If the CLI
-printed none, an explicitly supplied `conversation_id` is echoed, else it is `null`. The
-ID only reports where the run happened; success is still decided by the response file. A
-`task_id` is only a correlation label, not a resumable conversation. Use either an
-existing `conversation_id` or `resume=true`, not both. `resume=true` refers to the CLI's
-most recent conversation, not a workspace-specific session maintained by this server;
-prefer passing the returned `conversation_id`.
-
-`AGY_AGENT_PROFILE`, when set, is stable across calls; random worker subdirectories
-are no longer created. Authenticate that profile before using it. Calls into the CLI
-are serialized across processes (an in-process lock plus a file lock, `AGY_LOCK_FILE`),
-including `ping`; overlapping calls fail with `busy`. This does not lock out a human
-editor or an interactive `agy`. Avoid concurrent writers to the same checkout.
-
-The timeout budget starts before quota preflight and remaining time is passed to each
-CLI attempt. Each attempt explicitly sets `agy --print-timeout` from that remaining
-budget, reserving 5% (at most 10 seconds) for CLI exit and result collection. For
-example, a 600-second attempt uses `--print-timeout 590s`, rather than the CLI's
-independent default of 5 minutes. Python retains the original remaining budget as
-its hard subprocess timeout. CLI `timeout waiting for response` errors are reported
-as `timed_out`, not as a generic missing-output-file failure. Partial responses are
-still reported as `partial`, never as success.
-
-Restart/reconnect the MCP server after updating these files; an already-running
-Python process does not automatically reload the wrapper.
-
-Already-running auth/quota/switcher calls retain their own timeouts;
-this is not a hard wall-clock deadline for all network operations. The 15-second
-heartbeat reports elapsed time only. Background jobs and durable task logs are not
-implemented. On timeout or exception the whole `agy` process tree is killed (Windows: a
-Job Object with kill-on-close, which also reaps the tree if this process is killed outright;
-POSIX: the process group, with SIGTERM handled by the CLI). After a clean exit nothing the
-CLI left running is touched. Quota/auth retries can
-replay a task when no response file exists; inspect the working tree after failures.
-
-**Security:** coding tools still invoke `agy --dangerously-skip-permissions`.
-Workspace selection and the in-process lock do not enforce filesystem confinement.
-Use a separately restricted environment for untrusted tasks. `review-diff` now uses
-the existing text-only HTTP backend, not the CLI, so it cannot execute file tools;
-it requires backend authentication/connectivity and does not fall back to the CLI.
-Staged review never includes unstaged changes. Git failures are reported explicitly,
-and untracked files are not part of the diff.
-
----
-
-## Use as a Claude Code skill (no MCP server)
-
-The same agent is available without any MCP configuration. `pip install -e .` (or
-`uv pip install -e .`) provides three commands on `PATH`:
-
-| Command | Purpose |
+| Flag | Meaning |
 |---|---|
-| `antigravity-agent` | Run the agent once. Flags: `--prompt-file`, `--workspace`, `--model`, `--effort`, `--timeout`, `--resume` / `--conversation`, `--json`, `--save-artifact`. Exit code 0 only for `succeeded`. |
-| `antigravity-agent-hook` | Claude Code hook handler (`pre` / `post`) used by the skill. |
-| `antigravity-doctor` | Offline environment check. |
+| `PROMPT` / `--prompt` / `--prompt-file` / stdin | The task. |
+| `--workspace DIR` | Directory granted via `--add-dir` (default: current directory; `none` omits it). **Not a sandbox.** |
+| `--model`, `--effort low\|medium\|high`, `--system` | Model, reasoning effort, system instructions. |
+| `--timeout SECONDS` | Total budget, `0 < t <= 86400`, shared across retries (default `AGY_AGENT_TIMEOUT`, 900). |
+| `--conversation ID` / `--resume` | Continue a specific conversation / the CLI's most recent one. Not both. |
+| `--json` | Print one JSON record (below) instead of plain text. |
+| `--save-artifact` | Save the full reply under `.antigravity/artifacts/` and print a preview. |
+| `--models` | List the models the CLI offers (live `agy models`). |
+| `--review [FOCUS]` `[--staged]` | Read-only review of `git diff HEAD` through the text-only HTTP backend (cannot edit files). |
+| `--quota` | Remaining quota per model (HTTP backend). |
 
-The skill lives in [`.claude/skills/antigravity/SKILL.md`](.claude/skills/antigravity/SKILL.md)
-and is picked up automatically inside this repo. To use it in every project, copy that
-folder to `~/.claude/skills/antigravity/`. Other harnesses that read `SKILL.md` can use the
-same folder, but the `hooks:` frontmatter is a Claude Code feature; elsewhere the skill's
-"always verify yourself" steps are the only safeguard.
+Exit code is `0` only when the status is `succeeded`; `2` for invalid arguments.
 
-The skill's hooks (they only fire for `antigravity-agent` Bash calls):
-- **PreToolUse** blocks a call that lacks `--timeout` or `--json`.
-- **PostToolUse** and **PostToolUseFailure** inject `git status` / `git diff --stat`. After a
-  success the reminder is that success is not verification; after a non-`succeeded` status
-  (which exits 1, so Claude Code reports a *failure* event) it warns that files may be
-  half-edited. For background runs a success event says the task has not finished yet.
+### Result record
 
-The MCP server and the CLI share one result contract (`agy_agent.build_result`) and one
-cross-process lock (`AGY_LOCK_FILE`, default `<tmp>/antigravity-mcp-agent.lock`), so a skill
-call and an MCP call cannot run the agent at the same time; the loser gets `status: "busy"`.
-Run long tasks in the background: shell tools have their own timeout (Claude Code Bash:
-2 min default, 10 min max), independent of `--timeout`.
+`--json` prints: `status`, `task_id`, `conversation_id`, `resume_latest`, `workspace`, `model`,
+`exit_code`, `elapsed_seconds`, `verification="not_run_by_wrapper"`, `response`, `error`.
 
----
+- `succeeded`: the CLI exited 0 and wrote a non-empty response file. It does **not** prove the
+  code is correct or that tests passed. Inspect the diff and run tests yourself.
+- `partial`: an answer was written before a nonzero exit. Not retried.
+- `failed`, `timed_out`, `busy`: explicit failures (exit 1). Stdout-only CLI logs are never
+  accepted as an answer.
+- `conversation_id` is read from the CLI (`agy --output-format json`), so it is the ID of the
+  conversation that was created or continued. Pass it back with `--conversation` for an exact
+  follow-up; `--resume` means "the CLI's most recent conversation" globally, not per repo.
+- Large replies are saved under `<workspace>/.antigravity/artifacts/` and `response` holds a
+  preview plus the path (`AGY_MAX_INLINE_LINES`, `AGY_MAX_INLINE_CHARS`).
 
-## Dual-Mode CLI
+### Reliability
 
-`antigravity-mcp` is not only an MCP server; it is also a standalone CLI tool you can use directly from PowerShell, CMD, or Bash without needing an MCP client!
+- **Timeouts.** The budget starts before the quota preflight; each CLI attempt gets the
+  remaining time, with `agy --print-timeout` set 5% (at most 10 s) shorter so the CLI can exit
+  cleanly. Your shell tool has its own limit (Claude Code Bash: 2 min default, 10 min max):
+  run long tasks in the background.
+- **One run at a time.** An in-process lock plus a file lock (`AGY_LOCK_FILE`, default
+  `<tmp>/antigravity-agent.lock`) serialize runs across processes; the loser gets `busy`.
+  It does not lock out a human editor or an interactive `agy`.
+- **No orphans.** On timeout, exception or SIGTERM the whole `agy` process tree is killed
+  (Windows: a Job Object with kill-on-close, which also reaps the tree if the wrapper is killed
+  outright; POSIX: the process group). After a clean exit nothing the CLI left running is touched.
+- **Retries.** Quota or auth errors can replay a task when no response file exists; inspect the
+  working tree after failures.
 
-```powershell
-# 1. Live model quota status
-antigravity-mcp --quota
+### Hooks (Claude Code skill)
 
-# 2. Fast connectivity health-check
-antigravity-mcp --ping
+They only fire for `antigravity-agent` Bash calls that start the agent:
+- **PreToolUse** blocks a task call that lacks `--timeout` or `--json`.
+- **PostToolUse** and **PostToolUseFailure** inject `git status` / `git diff --stat`. A
+  non-`succeeded` status exits 1, which Claude Code reports as a *failure* event, so both are
+  wired. After a failure the note warns that files may be half-edited; for background runs a
+  success event says the task has not finished yet.
 
-# 3. List all supported models
-antigravity-mcp --models
+## Authentication
 
-# 4. Instant automated git diff review
-antigravity-mcp --review "security and performance"
+Two independent paths:
 
-# 5. Ask Antigravity directly from the terminal
-antigravity-mcp "Refactor the authentication module using bcrypt"
+- The agent (`antigravity-agent "..."`) uses the native `agy` CLI login. It needs no HTTP
+  backend tokens. Set `AGY_PROACTIVE=0` to skip the optional backend quota preflight when you
+  only use the CLI.
+- `--review` and `--quota` (and the optional preflight / account rotation) use the HTTP
+  backend. On Windows it reads the Credential Manager entry `gemini:antigravity`. On
+  WSL/Linux/macOS supply `AGY_ACCESS_TOKEN` (optionally `AGY_REFRESH_TOKEN`,
+  `AGY_TOKEN_EXPIRY` in ISO 8601) from your environment or secret manager. Refreshed tokens
+  stay in the running process. Never put token values in the repository.
 
-# 6. One-click conversation continuation (no session ID needed!)
-antigravity-mcp --resume "Now write tests for that refactored module"
+Automatic account rotation is optional and needs a separate account manager's `agy_switch.py`
+(`AGY_SWITCH_SCRIPT`); this repository does not ship it.
 
-# 7. Start as standard MCP stdio server
-antigravity-mcp --mcp
-```
+## Security
 
----
+The agent runs with `agy --dangerously-skip-permissions`. Workspace selection and the locks do
+**not** confine the filesystem. Use a clean `git status` (or a throwaway worktree) and a
+separately restricted environment for untrusted tasks. `--review` is text-only and cannot
+execute tools.
 
-## The 3 Pillars of MCP
-
-`antigravity-mcp` fully implements all 3 core pillars of the Model Context Protocol:
-
-### 1. Tools
-- **`ask-antigravity` / `ask-gemini`**: Executes tasks using the Google Antigravity coding agent with Read/Write/Bash tools and session resumption (`resume=True`).
-- **`review-diff`**: Automated, read-only code review of current git changes (`git diff`).
-- **`check-quota`**: Displays live remaining quota percentages and health status for all Antigravity models.
-- **`generate-tests`**: Generates comprehensive unit test suites for a given source code file.
-- **`ping`**: Quick health check verifying Antigravity responsiveness.
-- **`list-models`**: Lists all available models provided by the Antigravity backend.
-
-### 2. Resources
-Clients can read real-time context directly via MCP URIs:
-- **`antigravity://quota`**: Live remaining quota table in Markdown format.
-- **`antigravity://models`**: Complete JSON list of all available Antigravity models.
-- **`antigravity://status`**: Real-time runtime configuration, active profile, and engine status.
-
-### 3. Prompts
-Standardized prompt templates ready for one-click use in Claude, Cursor, and Codex:
-- **`code-review`**: Senior principal engineer code review template covering changes, bugs, edge cases, and optimizations.
-- **`tdd-feature`**: Test-Driven Development template following the strict Red-Green-Refactor cycle.
-- **`security-audit`**: In-depth security audit template focusing on OWASP Top 10 vulnerabilities, sanitization, and CVEs.
-
----
-
-## Environment Variables
+## Environment variables
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AGY_MODEL` | `gemini-3.8-flash-high` | Default model ID used by the agent. |
-| `AGY_EXE` | Auto-detected | Explicit path to `agy.exe`. |
-| `AGY_AGENT_TIMEOUT` | `900` | Timeout in seconds before terminating long runs. |
-| `AGY_DEFAULT_WORKSPACE` | Server working directory | Default workspace granted to the agent. `"none"` omits the grant; it does not isolate filesystem access. |
-| `CLOUD_CODE_URL` | None | Set only if using a custom local unlock proxy. |
+| `AGY_MODEL` | `gemini-3.8-flash-high` | Default model (`antigravity-agent --models` lists what is available). |
+| `AGY_EXE` | auto-detected | Explicit path to `agy`. |
+| `AGY_AGENT_TIMEOUT` | `900` | Default `--timeout`. |
+| `AGY_DEFAULT_WORKSPACE` | current directory | Default `--workspace`; `none` omits the grant. |
+| `AGY_AGENT_PROFILE` | unset | Stable profile directory for the CLI (authenticate it first). |
+| `AGY_LOCK_FILE` | `<tmp>/antigravity-agent.lock` | Cross-process lock file. |
+| `AGY_MAX_INLINE_LINES` / `AGY_MAX_INLINE_CHARS` | `350` / `16000` | Threshold before a reply becomes an artifact. |
+| `AGY_PROACTIVE` | on | `0` skips the backend quota preflight. |
+| `AGY_ACCESS_TOKEN`, `AGY_REFRESH_TOKEN`, `AGY_TOKEN_EXPIRY` | unset | Backend auth on WSL/Linux. |
+| `AGY_SWITCH_SCRIPT` | unset | Optional account rotation script. |
+| `CLOUD_CODE_URL` | Google's backend | Only for a custom local unlock proxy. |
 
----
+## Coming from the MCP server
 
-## Cross-Platform Compatibility
-- **Windows**: Full native support with Windows Credential Manager and Win32 file locking.
-- **Linux & macOS**: POSIX advisory file locking via `fcntl` and token auth via `AGY_ACCESS_TOKEN`.
-
----
+Earlier versions shipped `server.py`, an MCP server with `ask-antigravity` and friends. It was
+removed in v3: the skill and the CLI cover the same agent without a long-running process.
+`generate-tests`, `ping` and the MCP resources/prompts are gone; their useful parts are now
+prompt templates in the skill (`references/prompts.md`) and a one-line connectivity check in
+`SKILL.md`. The last revision with the server is the commit before this change
+(`git log --oneline -- server.py`).
 
 ## License
+
 MIT

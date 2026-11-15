@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-agy_agent.py — AGENTIC Antigravity backend for the antigravity-mcp server.
+agy_agent.py — runs the Antigravity coding agent (the `antigravity-agent` command / skill).
 
 Runs the real `agy` CLI AGENT with Read/Write/Bash tools.
 Mechanism:
@@ -87,8 +87,8 @@ def _cli_conversation_id(stdout):
 
 
 # ponytail: serialize CLI tasks because credentials/profile are shared. Two layers:
-#   1. _AGENT_LOCK  - threads inside one process (MCP server).
-#   2. a file lock  - separate processes (MCP server + `antigravity-agent` CLI/skill).
+#   1. _AGENT_LOCK  - threads inside one process.
+#   2. a file lock  - separate processes (two `antigravity-agent` invocations).
 # Use separate authenticated profiles/worktrees if parallel execution is needed.
 _AGENT_LOCK = threading.RLock()
 _PROC_LOCK_DEPTH = 0       # only mutated while holding _AGENT_LOCK
@@ -96,7 +96,7 @@ _PROC_LOCK_HANDLE = None
 
 
 def _lock_path():
-    return os.environ.get("AGY_LOCK_FILE") or os.path.join(tempfile.gettempdir(), "antigravity-mcp-agent.lock")
+    return os.environ.get("AGY_LOCK_FILE") or os.path.join(tempfile.gettempdir(), "antigravity-agent.lock")
 
 
 def _lock_file(fh):
@@ -161,7 +161,7 @@ def _exclusive_agent(func):
     def guarded(*args, **kwargs):
         global _PROC_LOCK_DEPTH, _PROC_LOCK_HANDLE
         if not _AGENT_LOCK.acquire(blocking=False):
-            raise AgentError("Another agent task is running in this server; retry after it finishes", status="busy")
+            raise AgentError("Another agent task is running in this process; retry after it finishes", status="busy")
         try:
             if _PROC_LOCK_DEPTH == 0:
                 _PROC_LOCK_HANDLE = _acquire_process_lock()
@@ -362,7 +362,7 @@ def run_agent(prompt, model=None, workspace=None, resume=False, conversation_id=
         raise ValueError("timeout must be finite and positive")
     if resume and conversation_id:
         raise ValueError("Use resume OR conversation_id, not both")
-    tmp = tempfile.mkdtemp(prefix="agymcp_")
+    tmp = tempfile.mkdtemp(prefix="agy_")
     infile = os.path.join(tmp, "in.txt")
     outfile = os.path.join(tmp, "out.txt")
     try:
@@ -490,7 +490,7 @@ def ask(prompt, model=None, system=None, workspace=None, resume=False, conversat
                          exit_code=rc, conversation_id=cid)
 
 
-# ---- shared helpers (used by the MCP server and the CLI/skill) --------------
+# ---- helpers ------------------------------------------------------------------
 def resolve_workspace(w=None, default=None):
     """Existing directory to grant via --add-dir, or None when opted out."""
     t = str(w or "").strip() or str(default or "").strip()
@@ -533,7 +533,7 @@ def handle_large_output(text, workspace, max_lines=MAX_INLINE_LINES, max_chars=M
 
 def build_result(*, status, task_id, conversation_id, resume, workspace, model,
                  exit_code, elapsed_seconds, response, error):
-    """The single JSON result contract shared by the MCP tool and the CLI."""
+    """The JSON result record printed by `antigravity-agent --json`."""
     return {
         "status": status,
         "task_id": task_id,
@@ -553,10 +553,95 @@ def _read_text(path):
     return Path(path).read_text(encoding="utf-8", errors="replace").lstrip("﻿")
 
 
+# ---- side commands (no agent run): models, quota, diff review -----------------
+def list_models():
+    """Live model list straight from the CLI (`agy models`)."""
+    try:
+        done = subprocess.run([AGY_EXE, "models"], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=60, stdin=subprocess.DEVNULL,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError(f"could not run `{AGY_EXE} models`: {e}")
+    if done.returncode != 0:
+        raise RuntimeError(f"`agy models` failed (rc={done.returncode}): {(done.stderr or done.stdout).strip()[-300:]}")
+    return "\n".join(ln for ln in done.stdout.splitlines() if ln.strip() and not ln.startswith("Fetching"))
+
+
+def _backend():
+    try:
+        import agy_backend
+    except ImportError as e:   # `requests` missing
+        raise RuntimeError(f"HTTP backend unavailable ({e}); run `pip install requests`")
+    return agy_backend
+
+
+def quota_report():
+    """Markdown table of the remaining quota per model (HTTP backend; needs backend auth)."""
+    backend = _backend()
+    sess = backend.Session()
+    sess.ensure_fresh()
+    quota = backend._retrieve_quota(sess)
+    if not quota:
+        raise RuntimeError("empty quota response from the backend")
+    lines = ["| Model | Remaining | Health |", "|---|---|---|"]
+    for name in sorted(quota):
+        frac = quota[name]
+        if isinstance(frac, (int, float)):
+            health = "healthy" if frac > 0.3 else ("low" if frac > 0.05 else "depleted")
+            lines.append(f"| `{name}` | {frac * 100:.0f}% | {health} |")
+        else:
+            lines.append(f"| `{name}` | {frac} | unknown |")
+    return "\n".join(lines)
+
+
+def review_diff(workspace=None, staged=False, focus=None, model=None):
+    """Read-only review of the git diff via the text-only HTTP backend (cannot touch files)."""
+    cwd = resolve_workspace(workspace, os.getcwd()) or os.getcwd()
+    cmd = ["git", "diff", "--staged"] if staged else ["git", "diff", "HEAD"]
+    try:
+        done = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError(f"git failed: {e}")
+    if done.returncode != 0:
+        raise RuntimeError(f"git failed (rc={done.returncode}): {done.stderr.strip()}")
+    diff = done.stdout.strip()
+    if not diff:
+        return f"No {'staged' if staged else 'uncommitted tracked'} git changes in {cwd} (untracked files are not part of the diff)."
+    focus_clause = f"Focus especially on: {focus}." if focus else "Check for bugs, security risks, performance regressions, and style."
+    prompt = (
+        "You are a senior code reviewer. Perform a rigorous, professional code review of the following git diff.\n"
+        f"{focus_clause}\n\n"
+        "Format your review as follows:\n"
+        "### 1. Summary of Changes\n### 2. Critical Issues & Potential Bugs\n"
+        "### 3. Suggestions & Optimizations\n### 4. Overall Recommendation (Approve / Request Changes)\n\n"
+        f"```diff\n{diff}\n```"
+    )
+    return _backend().ask(prompt, model=model or DEFAULT_MODEL,
+                          system="You are an expert code reviewer. Provide constructive, precise feedback.")
+
+
+def _side_command(a):
+    """Run --models/--quota/--review; returns an exit code, or None when none was requested."""
+    try:
+        if a.models:
+            print(list_models())
+        elif a.quota:
+            print(quota_report())
+        elif a.review is not None:
+            print(review_diff(a.workspace, a.staged, a.review.strip() or None, a.model))
+        else:
+            return None
+    except (RuntimeError, ValueError, OSError) as e:
+        log("ERROR:", e)
+        return 1
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="antigravity-agent",
-        description="Run the Antigravity coding agent once (skill/CLI entry point; no MCP needed). "
+        description="Run the Antigravity coding agent once (skill/CLI entry point). "
                     "Exit code 0 only when status is 'succeeded'. Success is NOT verification: "
                     "inspect the diff and run tests yourself.")
     ap.add_argument("prompt", nargs="?", default=None, help="Task prompt (or use --prompt-file / stdin).")
@@ -576,8 +661,23 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="Print one JSON result record instead of plain text.")
     ap.add_argument("--save-artifact", action="store_true",
                     help="Always save the response under .antigravity/artifacts/ and print a preview.")
+    ap.add_argument("--models", action="store_true", help="List the models `agy` offers, then exit.")
+    ap.add_argument("--quota", action="store_true",
+                    help="Show remaining quota per model (HTTP backend auth), then exit.")
+    ap.add_argument("--review", nargs="?", const="", default=None, metavar="FOCUS",
+                    help="Read-only review of `git diff HEAD` (text-only backend; cannot edit files). "
+                         "Optional FOCUS, e.g. 'security'.")
+    ap.add_argument("--staged", action="store_true", help="With --review: only staged changes.")
     a = ap.parse_args(argv)
 
+    side = sum([a.models, a.quota, a.review is not None])
+    if side > 1:
+        ap.error("use only one of --models, --quota, --review")
+    if side and (a.prompt is not None or a.prompt_opt or a.prompt_file or a.resume or a.conversation):
+        ap.error("--models/--quota/--review do not take a prompt, --resume or --conversation")
+    code = _side_command(a)
+    if code is not None:
+        return code
     if a.prompt is not None and a.prompt_opt is not None:
         ap.error("pass the prompt either positionally or via --prompt, not both")
     if a.resume and a.conversation:

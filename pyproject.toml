@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "antigravity-mcp"
-version = "2.0.0"
-description = "Pure Python MCP server exposing Google Antigravity (Gemini 3.7 Flash / Gemini 3.1 Pro) to Codex CLI, Claude Code, and MCP environments."
+name = "antigravity-agent"
+version = "3.0.0"
+description = "Skill + CLI that lets Claude Code (or any shell-capable harness) delegate coding tasks to the Google Antigravity agent (Gemini)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -13,7 +13,7 @@ authors = [
     {name = "Laimusp"},
     {name = "Antigravity Community"}
 ]
-keywords = ["mcp", "model-context-protocol", "antigravity", "gemini", "claude-code", "codex"]
+keywords = ["antigravity", "gemini", "claude-code", "skill", "agent", "cli"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -21,16 +21,13 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
-    "mcp>=2.0.0,<3",
-    "anyio>=4.5,<5",
     "requests>=2.28.0",
 ]
 
 [project.scripts]
-antigravity-mcp = "server:main"
 antigravity-doctor = "doctor:main"
 antigravity-agent = "agy_agent:main"
 antigravity-agent-hook = "agy_hooks:main"
 
 [tool.setuptools]
-py-modules = ["server", "agy_agent", "agy_backend", "agy_hooks", "doctor"]
+py-modules = ["agy_agent", "agy_backend", "agy_hooks", "doctor"]

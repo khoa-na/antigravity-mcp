@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-agy_backend.py — headless Antigravity (Gemini 3) caller for the antigravity-mcp server.
+agy_backend.py — headless Antigravity (Gemini 3) HTTP caller used by `antigravity-agent`
+(--review, --quota, optional quota preflight and account rotation).
 
 Why this exists: the official Antigravity CLI (`agy -p`) runs a TUI language-server and
 does NOT write the model answer to stdout when stdout is a pipe, so it is unusable for an
-MCP wrapper. Instead we talk to the same backend the CLI talks to:
+wrapper. Instead we talk to the same backend the CLI talks to:
 
     stdin/prompt  ->  v1internal:streamGenerateContent (via the local RU-unlock proxy)  ->  stdout
 
@@ -66,7 +67,7 @@ OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 # DPI-throttled you can route them through an external HTTP proxy by setting
 #   AGY_UPSTREAM_PROXY="http://user:pass@host:port"
 # Empty (the default) => direct connection (hosts->VPS). NEVER hard-code a proxy or credentials here:
-# keep them in the environment (e.g. the MCP server's `env` block in .claude.json) so they stay out
+# keep them in the environment (e.g. your shell profile or the skill host's env settings) so they stay out
 # of git and out of this public repo.
 _UP = os.environ.get("AGY_UPSTREAM_PROXY", "")
 GPROXIES = ({"http": _UP, "https": _UP} if _UP else None)
@@ -378,7 +379,7 @@ def swap_account():
 # ---- proactive quota-based rotation (configurable threshold) ----------------
 # Mirrors the gemini-cli + gchange pre-check: BEFORE a request, if the active
 # account's quota for the target model is below the threshold, switch first.
-# Lives here in the "agy" layer; the MCP server stays a thin caller.
+# Lives here in the "agy" layer; agy_agent stays a thin caller.
 CONFIG_FILE = os.path.expanduser("~/.gemini/antigravity_config.json")
 QUOTA_CACHE_FILE = os.path.expanduser("~/.gemini/antigravity_quota_cache.json")
 QUOTA_CACHE_LOCK = os.path.expanduser("~/.gemini/antigravity_quota_cache.lock")

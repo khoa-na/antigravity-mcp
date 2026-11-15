@@ -35,7 +35,7 @@ class CliTests(unittest.TestCase):
         self.assertIsNone(result["conversation_id"])
         self.assertEqual(ask.call_args.kwargs["timeout"], 20)
         self.assertIsNone(ask.call_args.kwargs["workspace"])
-        # Same keys, in the same order, as the MCP tool's record.
+        # The record layout is a public contract: keys and their order must not drift.
         self.assertEqual(list(result), list(agy_agent.build_result(
             status="", task_id="", conversation_id=None, resume=False, workspace=None,
             model=None, exit_code=0, elapsed_seconds=0, response="", error=None)))
@@ -97,6 +97,86 @@ class CliTests(unittest.TestCase):
         self.assertEqual(ask.call_args.args[0], "hello")
 
 
+class SideCommandTests(unittest.TestCase):
+    """--models / --quota / --review: none of them starts the agent."""
+
+    def run_side(self, *argv):
+        out = io.StringIO()
+        with mock.patch.object(agy_agent, "ask") as ask, contextlib.redirect_stdout(out),              contextlib.redirect_stderr(io.StringIO()):
+            code = agy_agent.main(list(argv))
+        ask.assert_not_called()
+        return code, out.getvalue()
+
+    def test_models_lists_live_cli_output_without_banner(self):
+        done = mock.Mock(returncode=0, stdout="Fetching available models...\nmodel-a\tModel A\n", stderr="")
+        with mock.patch.object(agy_agent.subprocess, "run", return_value=done) as run:
+            code, out = self.run_side("--models")
+        self.assertEqual((code, out), (0, "model-a\tModel A\n"))
+        self.assertEqual(run.call_args.args[0][1:], ["models"])
+
+    def test_models_failure_exits_1(self):
+        done = mock.Mock(returncode=1, stdout="", stderr="not logged in")
+        with mock.patch.object(agy_agent.subprocess, "run", return_value=done):
+            code, out = self.run_side("--models")
+        self.assertEqual((code, out), (1, ""))
+
+    def test_quota_table_is_sorted_with_health(self):
+        backend = mock.Mock()
+        backend._retrieve_quota.return_value = {"zeta": 0.8, "alpha": 0.01, "mid": 0.2}
+        with mock.patch.object(agy_agent, "_backend", return_value=backend):
+            code, out = self.run_side("--quota")
+        rows = [ln for ln in out.splitlines() if ln.startswith("| `")]
+        self.assertEqual(code, 0)
+        self.assertEqual([r.split("`")[1] for r in rows], ["alpha", "mid", "zeta"])
+        self.assertIn("depleted", rows[0])
+        self.assertIn("low", rows[1])
+        self.assertIn("healthy", rows[2])
+
+    def test_quota_without_backend_auth_exits_1(self):
+        backend = mock.Mock()
+        backend.Session.side_effect = OSError("HTTP backend authentication is not configured")
+        with mock.patch.object(agy_agent, "_backend", return_value=backend):
+            code, out = self.run_side("--quota")
+        self.assertEqual((code, out), (1, ""))
+
+    def test_review_sends_only_the_diff_to_the_text_backend(self):
+        git = mock.Mock(returncode=0, stdout="diff --git a/x b/x\n+secret change\n", stderr="")
+        backend = mock.Mock()
+        backend.ask.return_value = "LOOKS FINE"
+        with mock.patch.object(agy_agent.subprocess, "run", return_value=git) as run, \
+             mock.patch.object(agy_agent, "_backend", return_value=backend):
+            code, out = self.run_side("--review", "security", "--staged")
+        self.assertEqual((code, out.strip()), (0, "LOOKS FINE"))
+        self.assertEqual(run.call_args.args[0], ["git", "diff", "--staged"])
+        prompt = backend.ask.call_args.args[0]
+        self.assertIn("+secret change", prompt)
+        self.assertIn("Focus especially on: security.", prompt)
+
+    def test_review_defaults_to_diff_against_head_and_reports_empty_diff(self):
+        git = mock.Mock(returncode=0, stdout="  \n", stderr="")
+        with mock.patch.object(agy_agent.subprocess, "run", return_value=git) as run, \
+             mock.patch.object(agy_agent, "_backend") as backend:
+            code, out = self.run_side("--review")
+        self.assertEqual(code, 0)
+        self.assertIn("No uncommitted tracked git changes", out)
+        self.assertEqual(run.call_args.args[0], ["git", "diff", "HEAD"])
+        backend.assert_not_called()
+
+    def test_review_reports_git_failure(self):
+        git = mock.Mock(returncode=128, stdout="", stderr="not a git repository")
+        with mock.patch.object(agy_agent.subprocess, "run", return_value=git):
+            code, out = self.run_side("--review")
+        self.assertEqual((code, out), (1, ""))
+
+    def test_side_commands_are_mutually_exclusive_and_take_no_prompt(self):
+        for argv in (["--models", "--quota"], ["--review", "--quota"], ["--models", "some prompt"],
+                     ["--quota", "--resume"]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    agy_agent.main(argv)
+                self.assertEqual(caught.exception.code, 2)
+
+
 class ProcessLockTests(unittest.TestCase):
     def test_second_process_is_rejected_with_busy(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,7 +228,8 @@ class HookTests(unittest.TestCase):
 
     def test_pre_allows_complete_help_and_unrelated_calls(self):
         for command in ("antigravity-agent --timeout 600 --json --prompt-file p.md",
-                        "antigravity-agent --help", "git status", "echo antigravity-agent-hook",
+                        "antigravity-agent --help", "antigravity-agent --models",
+                        "antigravity-agent --review security", "antigravity-agent --quota", "git status", "echo antigravity-agent-hook",
                         "pip install -e ."):
             with self.subTest(command=command):
                 self.assertEqual(agy_hooks.pre(self.event(command)), 0)
