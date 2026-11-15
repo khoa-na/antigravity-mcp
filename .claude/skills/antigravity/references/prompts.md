@@ -1,4 +1,4 @@
-# Prompt templates for `antigravity-agent`
+# Prompt templates for the `antigravity` skill (`agy -p`)
 
 Copy one into your prompt file and fill the `<...>` parts. Always add the file scope and the
 acceptance check: the agent edits files directly and its "done" is not verification.
@@ -17,8 +17,9 @@ Run `<test command>` yourself and report its final output.
 ```
 
 ## Review a change (agent reads the code)
-For a read-only diff review that cannot edit files, prefer `antigravity-agent --review "<focus>"`.
-Use this prompt when the agent needs to read surrounding code too:
+For a read-only diff review that cannot edit files, use the "Read-only review" recipe in SKILL.md
+(diff embedded in the prompt, no `--dangerously-skip-permissions`). Use this prompt when the agent
+needs to read surrounding code too:
 ```
 You are a senior principal engineer. Review the uncommitted changes (`git diff HEAD`) in this
 repository. Do NOT modify any file. Focus on: <bugs | security | performance | edge cases>.
