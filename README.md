@@ -50,11 +50,10 @@ are the only safeguard.
   timeout);
 - get a **second opinion**: a separate read-only `agy` run on the diff, enforced by deny rules that
   block every file write and shell command even under `--dangerously-skip-permissions`;
-- check the remaining quota with `agy -p "/quota"` (answered by the CLI, no model call) and read the
-  right bucket for the model it will use: `Gemini Models` (Hydrogen, 3.8 Flash) and
-  `Claude and GPT models` each have a weekly and a 5-hour limit, `Gemini 4 Argon` has a weekly limit
-  only; the lower row decides, with go / finish-this-step / stop thresholds and no retry loops on a
-  quota error;
+- check the remaining quota with `agy -p "/quota"` (answered by the CLI, no model call). The bucket
+  for the configured model is found from the CLI's own output (the model's family name against each
+  group's name or model list), so no model names are hard-coded; the lowest bucket in that group
+  decides, with go / finish-this-step / stop thresholds and no retry loops on a quota error;
 - verify the result itself (`git status`, `git diff`, run the tests) instead of trusting "SUCCESS".
 
 Three hooks (Claude Code only) fire for `agy -p ...` Bash calls. They are plain bash in the skill's
@@ -83,6 +82,25 @@ recipes worked. The test also caught a real bug in an earlier version of the ski
 `--add-dir` the worker wrote its files outside the worktree while reporting success; the
 independent verification step caught it.
 
+## Choosing the model and reasoning level
+
+Each skill starts with a **Configuration** block, the only place a model name appears in the
+instructions:
+
+```text
+model:  gemini-4-hydrogen      # the worker skill (the advisor skill ships with gemini-4-argon / high)
+effort: medium
+```
+
+`model` is a family from `agy models` (the ID without its trailing level), a full ID, or `default` for
+the model configured in `agy` itself; `effort` is `low` to `max` or `default`. The skill builds
+`--model <model> --effort <effort>` from them, so changing models or levels means editing those two
+lines and nothing else. You can also name another model in the request for a single run. Verified
+with `agy`: a family plus `--effort` works (`gemini-4-argon` + `high`), a full ID plus a different
+`--effort` is rejected as a conflict, and a level the model lacks fails with a message listing the
+available ones (`gemini-4-argon has no "xhigh" effort (available: low, medium, high)`); the skill
+reports that instead of guessing.
+
 ## Second skill: `antigravity-advisor`
 
 [`.claude/skills/antigravity-advisor/SKILL.md`](.claude/skills/antigravity-advisor/SKILL.md) uses
@@ -99,9 +117,9 @@ to your CLAUDE.md if you want it automatic). Claude then verifies the advisor's 
 relying on them and, on a conflict with its own evidence, makes one reconcile call with
 `--conversation` instead of silently switching.
 
-The advisor checks the matching quota bucket before its first call (Argon: the weekly row only), keeps
-its calls few, and offers a model from another group if Argon is nearly empty. Its model defaults
-to **`gemini-4-argon-high`** (any other model can be named). On the same
+The advisor checks the matching quota bucket before its first call, keeps its calls few, and offers
+a model from another group if its bucket is nearly empty. Its model is whatever the skill's
+Configuration block declares (currently `gemini-4-argon`, effort `high`). On the same
 question and briefing, Argon high (about 150 s) overlapped Hydrogen high on the main findings and added
 two more real bugs that reproduced when run: a newline inside an item name splits the CLI `list` line,
 and an item added with quantity 0 can never be removed.

@@ -82,6 +82,26 @@ reviewer. It differs in two ways you must account for:
 
 Request from the user: $ARGUMENTS
 
+## Configuration (edit only here)
+The model and reasoning level this skill uses are declared here and nowhere else:
+
+```text
+model:  gemini-4-argon
+effort: high
+```
+
+- `model`: a model family from `agy models` (the ID without its trailing level, for example
+  `gemini-4-argon`), a full ID such as `gemini-4-argon-high`, or `default` to use the model configured
+  in `agy` itself.
+- `effort`: `low`, `medium`, `high`, `xhigh`, `max`, or `default`. Leave it `default` when `model` is a
+  full ID that already ends in a level: the two conflict.
+- Build `<model-flags>` from them: `--model <model> --effort <effort>`, leaving out any that is
+  `default`. Use `<model-flags>` wherever the commands below show it. If the user names another model
+  or level in their request, use theirs for this run only.
+- Not every level exists for every model. An unsupported pair fails with `invalid model selection ...
+  (available: ...)` (exit 1, no response). Do not guess or retry with another model: tell the user
+  which levels are available so they can edit this block.
+
 ## When to consult
 The same three moments as the built-in advisor:
 1. **Before substantive work**: after you have oriented yourself (read the files, saw the error),
@@ -120,30 +140,36 @@ advisor by `/advisor-` in the path). Sections:
    file:line when you read the repo."
 
 ## Check the quota first
-Each advisor call spends quota in proportion to the tokens it reads and writes, and Argon has its own
-bucket. Before the first call of a session (and again if a call fails), ask the CLI; this costs
-nothing and calls no model:
+Each advisor call spends quota in proportion to the tokens it reads and writes. Before the first call
+of a session (and again if a call fails), ask the CLI; this costs nothing and calls no model:
 
 ```bash
 MSYS_NO_PATHCONV=1 agy -p "/quota" --output-format json --print-timeout 30s
 ```
-`response` is tab-separated: group, limit, percent remaining, reset time (UTC). Find the row for the
-model you are about to use:
+Find the bucket for the configured model without assuming anything about model names:
+1. Get the model's display name from `agy models` (second column, for example `Gemini 4 Argon
+   (High)`) and drop the trailing `(...)`: that is its family name (`Gemini 4 Argon`). With
+   `model: default` you cannot know which model `agy` will use, so look at every group and use the
+   lowest bucket.
+2. In the JSON read `command.data.groups[]`. A group applies to your model if its `name` equals the
+   family name, or its `description` lists it (for example `Models within this group: ...`).
+3. Each group has `buckets[]` with `name`, `window` (`weekly`, `5h`, ...), `remaining_fraction`
+   (0 to 1) and `reset_time` (UTC). The **lowest** `remaining_fraction` in the applicable group
+   decides. The tab-separated `response` field summarises the same numbers but does not say which
+   models belong to which group.
+4. No group matches: say so and carry on cautiously; do not block.
 
-| Model | Rows that matter |
-|---|---|
-| `gemini-4-argon-*` (the default) | `Gemini 4 Argon` / `Gemini 4 Argon Weekly Limit`. **Weekly only**, no 5-hour limit. Separate bucket on Pro plans; part of the larger Gemini bucket on Ultra. |
-| `gemini-4-hydrogen-*`, `gemini-3.8-flash-*` | `Gemini Models`: **both** `Weekly` and `Five Hour` rows; the lower one decides. |
-| `claude-*`, `gpt-oss-*` | `Claude and GPT models`: both `Weekly` and `Five Hour`; the lower one decides. |
+(How groups and windows are arranged changes. When this was written one group had only a weekly
+bucket and the others had weekly and 5-hour ones. Read them from the output, do not assume.)
 
 Suggested thresholds (these are this skill's judgement, not `agy`'s):
 - **20% or more remaining**: go ahead.
 - **5% to 20%**: call once, keep the briefing short, make no reconcile call, and tell the user the
   bucket is low and when it resets.
-- **Under 5%, or the row is missing**: do not call. Tell the user which bucket is empty and its
-  reset time. Offer a model from a *different* group (for example `gemini-4-hydrogen-high` when
-  Argon is low) and use it only if the user agrees. A `claude-*` fallback works but is the same
-  family as you, so it is a weaker second opinion.
+- **Under 5%, or no bucket found for a model you know is limited**: do not call. Tell the user which
+  bucket is empty and its reset time. Offer a model from a *different* group (the same output shows
+  the groups) and use it only if the user agrees. A model from your own family (Claude) is a weaker
+  second opinion.
 
 Spend sparingly: normally one call before you start and one before you declare done; a reconcile call
 only on a real conflict. If a call returns `status: ERROR` whose text mentions quota, exhausted,
@@ -155,13 +181,12 @@ on an exact string.)
 Run it in the foreground (advice is quick and you are waiting on it), in the repo:
 
 ```bash
-cd /abs/path/to/repo && agy -p "You are an expert technical advisor reviewing the work of another engineer. Read C:/abs/tmp/advisor-<id>.md. You may read files in the current directory to check its claims. You cannot and must not edit files or run commands. Follow the reply format in the briefing exactly." --model gemini-4-argon-high --dangerously-skip-permissions --settings '{"permissions":{"deny":["command(*)","write_file(*)"]}}' --output-format json --print-timeout 300s
+cd /abs/path/to/repo && agy -p "You are an expert technical advisor reviewing the work of another engineer. Read C:/abs/tmp/advisor-<id>.md. You may read files in the current directory to check its claims. You cannot and must not edit files or run commands. Follow the reply format in the briefing exactly." <model-flags> --dangerously-skip-permissions --settings '{"permissions":{"deny":["command(*)","write_file(*)"]}}' --output-format json --print-timeout 300s
 ```
 - Set the Bash `timeout` to 330000 (above `--print-timeout`). Never pass `--add-dir` (it re-roots the
   agent's working directory). On Windows write paths inside the prompt as `C:/Users/...`.
-- Model: `gemini-4-argon-high` by default (the user's choice for the advisor role). Use whichever
-  the user names instead (for example `gemini-4-hydrogen-xhigh` for a very hard problem); `agy models`
-  lists the IDs. Check the matching quota bucket first (see "Check the quota first").
+- Replace `<model-flags>` with the flags built from "Configuration" (`agy models` lists the IDs).
+  Check the matching quota bucket first (see "Check the quota first").
 - Stdout is one JSON object: `status` (`SUCCESS`/`ERROR`), `response` (the advice),
   `conversation_id`, `error`. Exit code 0 is success, 1 error, 2 usage error (no JSON), 3 print
   timeout. Do not trust `duration_seconds` as this call's time.

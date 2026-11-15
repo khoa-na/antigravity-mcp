@@ -88,6 +88,26 @@ sub-agent in between:
 
 Task from the user: $ARGUMENTS
 
+## Configuration (edit only here)
+The model and reasoning level this skill uses are declared here and nowhere else:
+
+```text
+model:  gemini-4-hydrogen
+effort: medium
+```
+
+- `model`: a model family from `agy models` (the ID without its trailing level, for example
+  `gemini-4-hydrogen`), a full ID such as `gemini-4-hydrogen-medium`, or `default` to use the model
+  configured in `agy` itself.
+- `effort`: `low`, `medium`, `high`, `xhigh`, `max`, or `default`. Leave it `default` when `model` is a
+  full ID that already ends in a level: the two conflict.
+- Build `<model-flags>` from them: `--model <model> --effort <effort>`, leaving out any that is
+  `default`. Use `<model-flags>` wherever the commands below show it. If the user names another model
+  or level in their request, use theirs for this run only.
+- Not every level exists for every model. An unsupported pair fails with `invalid model selection ...
+  (available: ...)` (exit 1, no response). Do not guess or retry with another model: tell the user
+  which levels are available so they can edit this block.
+
 ## Safety first
 - `--dangerously-skip-permissions` is required for tasks (headless mode cannot prompt; without it,
   shell commands in a workspace `agy` does not trust are silently denied and you get an empty
@@ -132,7 +152,7 @@ the parent folder that holds your other worktrees. It is not needed: under
 repo. On Windows write the paths inside the prompt text as `C:/Users/...` (forward slashes).
 
 ```bash
-cd /abs/path/to/repo && agy -p "Read /abs/tmp/prompt.md and carry out the task described there. Follow its reply format exactly." --dangerously-skip-permissions --output-format json --print-timeout 900s
+cd /abs/path/to/repo && agy -p "Read /abs/tmp/prompt.md and carry out the task described there. Follow its reply format exactly." <model-flags> --dangerously-skip-permissions --output-format json --print-timeout 900s
 ```
 
 - **Run it with the Bash tool's `run_in_background: true`.** Real runs take 100-150 s up to many
@@ -142,8 +162,7 @@ cd /abs/path/to/repo && agy -p "Read /abs/tmp/prompt.md and carry out the task d
 - **Always pass `--print-timeout`** (Go duration: `900s`, `15m`) and `--output-format json`; a hook
   blocks the call otherwise. The `--print-timeout` default, 0, waits forever. When it fires, `agy`
   stops the turn and its background tasks itself and exits 3 (partial work).
-- Do not pass `--model` unless the user asked: `agy` then uses the model they configured. Otherwise
-  `--model <id>` (from `agy models`) and `--effort low|medium|high|xhigh|max`.
+- Replace `<model-flags>` with the flags built from "Configuration" (`agy models` lists the IDs).
 - **Git Bash on Windows rewrites a prompt that starts with `/`** into a path. Prefix such commands
   with `MSYS_NO_PATHCONV=1` (needed for the quota command below).
 
@@ -152,7 +171,7 @@ Give the worker its own checkout so your working tree is untouched until you dec
 
 ```bash
 cd /abs/path/to/repo && git worktree add -b agy/<id> /abs/tmp/agy-<id> HEAD
-cd /abs/tmp/agy-<id> && agy -p "..." --dangerously-skip-permissions --output-format json --print-timeout 900s
+cd /abs/tmp/agy-<id> && agy -p "..." <model-flags> --dangerously-skip-permissions --output-format json --print-timeout 900s
 ```
 - The worktree starts from `HEAD`: uncommitted changes in the main checkout are **not** in it.
 - Review the result with `git -C /abs/tmp/agy-<id> status --short` and `git diff`, and run the tests
@@ -182,27 +201,35 @@ the turn completed, not that the code is right. After `ERROR`/`3` the tree may b
   Antigravity use in between). After exit 3, continue with "Continue and finish the task".
 - `--continue` resumes the CLI's **most recent** conversation, global and not per repo. Use it only
   right after your own run.
-- Pass the same safety flags again; each run is a new process.
+- Pass the same `<model-flags>` and safety flags again; each run is a new process.
 
 ## Quota
 ```bash
 MSYS_NO_PATHCONV=1 agy -p "/quota" --output-format json --print-timeout 30s
 ```
-Answered by the CLI itself: instant, no model call, no quota spent. `response` is tab-separated:
-group, limit, percent remaining, reset time (UTC). Models share a bucket by group, and quota is
-consumed in proportion to token cost, so long multi-step tasks drain it faster than short ones:
+Answered by the CLI itself: instant, no model call, no quota spent. Models share a bucket by group,
+and quota is consumed in proportion to token cost, so long multi-step tasks drain it faster than
+short ones. Find the bucket for the configured model without assuming anything about model names:
+1. Get the model's display name from `agy models` (second column, for example `Gemini 4 Hydrogen
+   (Medium)`) and drop the trailing `(...)`: that is its family name (`Gemini 4 Hydrogen`). With
+   `model: default` you cannot know which model `agy` will use, so look at every group and use the
+   lowest bucket.
+2. In the JSON read `command.data.groups[]`. A group applies to your model if its `name` equals the
+   family name, or its `description` lists it (for example `Models within this group: ...`).
+3. Each group has `buckets[]` with `name`, `window` (`weekly`, `5h`, ...), `remaining_fraction`
+   (0 to 1) and `reset_time` (UTC). The **lowest** `remaining_fraction` in the applicable group
+   decides. The tab-separated `response` field summarises the same numbers but does not say which
+   models belong to which group.
+4. No group matches: say so and carry on cautiously; do not block.
 
-| Model you will use | Rows that matter |
-|---|---|
-| `gemini-4-hydrogen-*`, `gemini-3.8-flash-*` (and the user's configured default if it is one of these) | `Gemini Models`: **both** `Weekly Limit` and `Five Hour Limit`; the lower one decides |
-| `gemini-4-argon-*` | `Gemini 4 Argon Weekly Limit` only (separate bucket on Pro plans) |
-| `claude-*`, `gpt-oss-*` | `Claude and GPT models`: both rows; the lower one decides |
+(How groups and windows are arranged changes. When this was written one group had only a weekly
+bucket and the others had weekly and 5-hour ones. Read them from the output, do not assume.)
 
-Before a task, and again every two or three steps of a multi-step task, check the row for the model
+Before a task, and again every two or three steps of a multi-step task, check the bucket for the model
 you use. Suggested thresholds (this skill's judgement, not `agy`'s): 20% or more, go; 5-20%, finish
 only the current step and tell the user the bucket is low and when it resets; under 5%, stop and
-report the reset time instead of starting another run. A `Five Hour` row refills in at most five
-hours, a weekly one in days, so a low 5-hour bucket usually just means waiting.
+report the reset time instead of starting another run. A `5h` window refills within five hours, a
+weekly one in days, so a low 5-hour bucket usually just means waiting.
 
 If a run ends with `status: ERROR` whose text mentions quota, exhausted, rate limit or 429, treat it
 as a quota failure: run the check, report the reset time, and do not loop retries. The tree may be
@@ -215,11 +242,12 @@ block every file write and shell command even under `--dangerously-skip-permissi
 `write_file` covers `edit_file` too).
 
 ```bash
-cd /abs/path/to/repo-or-worktree && git diff HEAD > /abs/tmp/review.diff && agy -p "You are a senior reviewer. Read /abs/tmp/review.diff and review it, reading other files in the repo for context if needed. You cannot and must not edit files or run commands. Answer in at most 15 lines: Critical issues (file:line), Suggestions, Verdict." --dangerously-skip-permissions --settings '{"permissions":{"deny":["command(*)","write_file(*)"]}}' --output-format json --print-timeout 300s
+cd /abs/path/to/repo-or-worktree && git diff HEAD > /abs/tmp/review.diff && agy -p "You are a senior reviewer. Read /abs/tmp/review.diff and review it, reading other files in the repo for context if needed. You cannot and must not edit files or run commands. Answer in at most 15 lines: Critical issues (file:line), Suggestions, Verdict." <model-flags> --dangerously-skip-permissions --settings '{"permissions":{"deny":["command(*)","write_file(*)"]}}' --output-format json --print-timeout 300s
 ```
 Untracked files are not in `git diff HEAD`; add them to the diff file yourself if they matter. These
 two rules are the ones that were tested; run `git status` afterwards anyway. This is a second model
-run, not proof: you still verify with tests.
+run, not proof: you still verify with tests. For a more independent view the user can name a
+different model for this run; otherwise it uses the configured `<model-flags>`.
 
 ## If it goes wrong
 - Stopping a background Claude Code task (or its timeout) killed `agy` and its child processes in
