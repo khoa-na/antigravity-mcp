@@ -12,10 +12,23 @@ hooks:
           shell: bash
           command: |
             input=$(cat)
-            case "$input" in
-              *"agy -p"*) ;;
+            orig=$input
+            flat=$(printf '%s' "$input" | sed 's/"command"[[:space:]]*:[[:space:]]*"/"command":"/')
+            rest=${flat#*'"command":"'}
+            [ "$rest" = "$flat" ] && exit 0
+            cmd=$rest
+            while :; do
+              case "$cmd" in
+                "cd "*"&& "*) cmd=${cmd#*&& } ;;
+                *) break ;;
+              esac
+            done
+            case "$cmd" in "MSYS_NO_PATHCONV=1 "*) cmd=${cmd#MSYS_NO_PATHCONV=1 } ;; esac
+            case "$cmd" in
+              "agy -p "*) ;;
               *) exit 0 ;;
             esac
+            input=$cmd
             case "$input" in
               *"/advisor-"*) exit 0 ;;
             esac
@@ -35,17 +48,30 @@ hooks:
           shell: bash
           command: |
             input=$(cat)
-            case "$input" in
-              *"agy -p"*) ;;
+            orig=$input
+            flat=$(printf '%s' "$input" | sed 's/"command"[[:space:]]*:[[:space:]]*"/"command":"/')
+            rest=${flat#*'"command":"'}
+            [ "$rest" = "$flat" ] && exit 0
+            cmd=$rest
+            while :; do
+              case "$cmd" in
+                "cd "*"&& "*) cmd=${cmd#*&& } ;;
+                *) break ;;
+              esac
+            done
+            case "$cmd" in "MSYS_NO_PATHCONV=1 "*) cmd=${cmd#MSYS_NO_PATHCONV=1 } ;; esac
+            case "$cmd" in
+              "agy -p "*) ;;
               *) exit 0 ;;
             esac
+            input=$cmd
             case "$input" in
               *"/advisor-"*) exit 0 ;;
             esac
             case "$input" in
               *'\"/quota\"'*|*'\"/usage\"'*|*"'/quota'"*|*"'/usage'"*) exit 0 ;;
             esac
-            if printf '%s' "$input" | grep -Eq '"run_in_background"[[:space:]]*:[[:space:]]*true'; then
+            if printf '%s' "$orig" | grep -Eq '"run_in_background"[[:space:]]*:[[:space:]]*true'; then
               printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"agy was started in the background and has NOT finished. Wait for the completion notification, then read its short JSON result, run git status and git diff in the target repo, and run its tests before reporting done."}}'
             else
               printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"agy finished. A SUCCESS status is not verification of correctness. Read the JSON, then run git status and git diff in the repo you delegated to and run its tests before reporting done."}}'
@@ -58,10 +84,23 @@ hooks:
           shell: bash
           command: |
             input=$(cat)
-            case "$input" in
-              *"agy -p"*) ;;
+            orig=$input
+            flat=$(printf '%s' "$input" | sed 's/"command"[[:space:]]*:[[:space:]]*"/"command":"/')
+            rest=${flat#*'"command":"'}
+            [ "$rest" = "$flat" ] && exit 0
+            cmd=$rest
+            while :; do
+              case "$cmd" in
+                "cd "*"&& "*) cmd=${cmd#*&& } ;;
+                *) break ;;
+              esac
+            done
+            case "$cmd" in "MSYS_NO_PATHCONV=1 "*) cmd=${cmd#MSYS_NO_PATHCONV=1 } ;; esac
+            case "$cmd" in
+              "agy -p "*) ;;
               *) exit 0 ;;
             esac
+            input=$cmd
             case "$input" in
               *"/advisor-"*) exit 0 ;;
             esac

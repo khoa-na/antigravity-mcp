@@ -12,10 +12,23 @@ hooks:
           shell: bash
           command: |
             input=$(cat)
-            case "$input" in
-              *"agy -p"*) ;;
+            orig=$input
+            flat=$(printf '%s' "$input" | sed 's/"command"[[:space:]]*:[[:space:]]*"/"command":"/')
+            rest=${flat#*'"command":"'}
+            [ "$rest" = "$flat" ] && exit 0
+            cmd=$rest
+            while :; do
+              case "$cmd" in
+                "cd "*"&& "*) cmd=${cmd#*&& } ;;
+                *) break ;;
+              esac
+            done
+            case "$cmd" in "MSYS_NO_PATHCONV=1 "*) cmd=${cmd#MSYS_NO_PATHCONV=1 } ;; esac
+            case "$cmd" in
+              "agy -p "*) ;;
               *) exit 0 ;;
             esac
+            input=$cmd
             case "$input" in
               *"/advisor-"*) ;;
               *) exit 0 ;;
@@ -40,10 +53,23 @@ hooks:
           shell: bash
           command: |
             input=$(cat)
-            case "$input" in
-              *"agy -p"*) ;;
+            orig=$input
+            flat=$(printf '%s' "$input" | sed 's/"command"[[:space:]]*:[[:space:]]*"/"command":"/')
+            rest=${flat#*'"command":"'}
+            [ "$rest" = "$flat" ] && exit 0
+            cmd=$rest
+            while :; do
+              case "$cmd" in
+                "cd "*"&& "*) cmd=${cmd#*&& } ;;
+                *) break ;;
+              esac
+            done
+            case "$cmd" in "MSYS_NO_PATHCONV=1 "*) cmd=${cmd#MSYS_NO_PATHCONV=1 } ;; esac
+            case "$cmd" in
+              "agy -p "*) ;;
               *) exit 0 ;;
             esac
+            input=$cmd
             case "$input" in
               *"/advisor-"*) ;;
               *) exit 0 ;;
@@ -57,10 +83,23 @@ hooks:
           shell: bash
           command: |
             input=$(cat)
-            case "$input" in
-              *"agy -p"*) ;;
+            orig=$input
+            flat=$(printf '%s' "$input" | sed 's/"command"[[:space:]]*:[[:space:]]*"/"command":"/')
+            rest=${flat#*'"command":"'}
+            [ "$rest" = "$flat" ] && exit 0
+            cmd=$rest
+            while :; do
+              case "$cmd" in
+                "cd "*"&& "*) cmd=${cmd#*&& } ;;
+                *) break ;;
+              esac
+            done
+            case "$cmd" in "MSYS_NO_PATHCONV=1 "*) cmd=${cmd#MSYS_NO_PATHCONV=1 } ;; esac
+            case "$cmd" in
+              "agy -p "*) ;;
               *) exit 0 ;;
             esac
+            input=$cmd
             case "$input" in
               *"/advisor-"*) ;;
               *) exit 0 ;;

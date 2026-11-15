@@ -41,24 +41,32 @@ enough.
    `advisor-dual-`, outside the repo) from **the same facts**.
 4. **Facts only.** No opinion, no preferred plan, no "I think X". Phrase the question openly ("what is
    the best way to ..., and what are the main risks of each option?"). Both advisors must start from
-   the same evidence and nothing that nudges them.
+   the same evidence and nothing that nudges them. The advisor skill's template has "Plan or decision
+   under review" and "What worries you" sections: here fill them with the **options** and the **open
+   risks stated as questions**, never with the option you prefer.
 5. Do the quota check for the Antigravity model (per the advisor skill) and tell the user once that
    the briefing goes to Google.
 6. **Freeze the briefing now.** Do not edit it after you have read either answer.
 
-## Step 2: Ask both, independently
-Best: issue the Claude `advisor()` call and the Antigravity command **in the same message**, so neither
-answer exists when the other is produced. Acceptable: Claude's advisor first, then Antigravity (its
-briefing is already frozen and contains no Claude opinion). **Not acceptable:** Antigravity first and
-then Claude's advisor, because Claude's advisor would read Gemini's answer in the transcript.
+## Step 2: Ask both, independently (the order is mandatory)
+1. **Call `advisor()` first and wait for its answer before you issue the Antigravity command.** Do not
+   put the Antigravity command in the same tool-call batch. (In a real run an `advisor()` call batched
+   with a Bash call got no result at all; the model then called it again after it had already read
+   Gemini's answer, and independence was lost. When `advisor()` is called on its own its answer arrives
+   inline and you simply continue.) The test of independence is order: Claude's answer must exist
+   before the Antigravity command is issued.
+2. Wait for its answer and **record it** (quote its key claims in your next visible message).
+3. **Then** run the Antigravity command. Its briefing was frozen in step 1 and contains no Claude
+   opinion, so Gemini is independent of Claude's answer too.
 
-Never quote one advisor's answer to the other at this stage.
+**Never** run Antigravity first and read its answer before `advisor()` has answered: Claude's advisor
+reads the transcript and would be anchored. If you ever must, redirect the Antigravity output to a file
+(`> .../dual-agy-1.json`) and do not read that file until Claude's answer is recorded. Never quote one
+advisor's answer to the other at this stage. If the order was broken for any reason, say so in the
+report and mark the two answers as not independent.
 
-**If you cannot issue both in one message**, keep them independent with a file: run the Antigravity
-command with its output redirected to a file (`> .../dual-agy-1.json`) and **do not read that file**.
-Then call `advisor()`. The Antigravity answer is not in the transcript, so Claude's advisor cannot be
-anchored by it. Read the file only after Claude's answer is recorded. Say in the report that the calls
-were sequential and why independence still held.
+Do not call `advisor()` a third time except for the merge in step 4. The first call is the independent
+opinion, not the merge.
 
 ## Step 3: Compare; do not blend yet
 Record both answers faithfully (quote the key claims). Then build the comparison:
@@ -76,8 +84,10 @@ Record both answers faithfully (quote the key claims). Then build the comparison
   report.
 
 ## Step 4: Ask Claude's advisor to merge
-Write a visible **SYNTHESIS REQUEST** message, then call `advisor()` again. Put this in the message
-(the advisor reads the transcript, so the comparison table and both answers must already be in it):
+This is the second and last `advisor()` call. The **last paragraph of the message that contains the
+call must be the `SYNTHESIS REQUEST` text below** (your comparison table goes above it in the same
+message); do not rely on the advisor guessing that this call is a merge. The advisor reads the
+transcript, so the comparison table and both answers must already be in it. Use this text:
 
 > SYNTHESIS REQUEST. Above are two independent opinions on the same problem: A (your earlier
 > answer) and B (the Antigravity/Gemini advisor), my comparison table, and the facts I verified.

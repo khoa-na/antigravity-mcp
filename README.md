@@ -159,6 +159,18 @@ two facts neither could check and that were then tested: a `PostToolUse` hook re
 (`stop_hook_active`) without looping. The final Antigravity round found three real defects in the
 merged plan. The merged protocol is a design; its hooks were not built.
 
+Tested twice by letting a fresh Claude Code session run the skill on its own. The first run broke
+three rules, all caused by the skill or its hooks: an `advisor()` call batched with the Antigravity
+command returned nothing, so Claude's advisor was called again after it had read Gemini's answer
+(not independent); the synthesis request was skipped; and a hook blocked a command that merely wrote
+the briefing. After rewording the order (Claude's advisor first, its answer in hand before the
+Antigravity command) and anchoring the hooks to commands that start with `agy -p`, the second run
+(a new problem: how to package the three skills) kept the order, included the synthesis request,
+checked facts itself, ran the Antigravity check round and reported an unverified design as such, for
+about 1.25 USD of orchestration. One lesson from fixing the hooks: on Windows Claude Code hands an
+inline hook script to bash so that two adjacent backslashes become one, so hook scripts must not
+contain `\\` (the first hook rewrite silently did nothing for that reason).
+
 ## How `agy -p` behaves (verified)
 
 | | |
