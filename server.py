@@ -210,7 +210,9 @@ async def ask_antigravity(
         if result_format == "json":
             return json.dumps(agy_agent.build_result(
                 status=error.status if error else "succeeded", task_id=worker_id,
-                conversation_id=session_conv_id, resume=resume, workspace=ws, model=model,
+                conversation_id=(getattr(raw_result, "conversation_id", None)
+                                 or (error.conversation_id if error else None) or session_conv_id),
+                resume=resume, workspace=ws, model=model,
                 exit_code=error.exit_code if error else 0,
                 elapsed_seconds=time.monotonic() - started,
                 response=formatted, error=str(error) if error else None), ensure_ascii=False)

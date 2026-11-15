@@ -5,7 +5,10 @@ Installed as the `antigravity-agent-hook` console script and referenced from the
 skill's frontmatter, so the skill folder needs no copied Python or relative paths.
 
     antigravity-agent-hook pre    PreToolUse  (Bash): block calls without --timeout/--json
-    antigravity-agent-hook post   PostToolUse (Bash): inject a working-tree summary
+    antigravity-agent-hook post   PostToolUse / PostToolUseFailure (Bash): inject a working-tree
+                                  summary. The CLI exits 1 for every non-"succeeded" status, and
+                                  Claude Code reports that as PostToolUseFailure, so both events
+                                  must be wired to this handler.
 
 Hooks are a safety net, not the contract: SKILL.md still tells the host agent to
 inspect the diff and run tests itself, because other harnesses will not run these.
@@ -63,8 +66,9 @@ def post(event):
     command = _command(event)
     if not _CALL.search(command) or _has_flag(command, "--help") or _has_flag(command, "-h"):
         return 0
+    failed = event.get("hook_event_name") == "PostToolUseFailure"
     tool_input = event.get("tool_input") or {}
-    if tool_input.get("run_in_background"):
+    if tool_input.get("run_in_background") and not failed:
         note = ("Antigravity was started in the background; it has NOT finished. Wait for the "
                 "completion notification, then read its JSON result and inspect the diff.")
     else:
@@ -74,12 +78,19 @@ def post(event):
         if status is None:
             tree = "Working tree: not a git repository (or git unavailable)."
         else:
-            tree = ("Working tree after the run:\n" + (status or "(clean)") +
+            tree = ("Working tree now:\n" + (status or "(clean)") +
                     ("\n\n" + stat if stat else ""))
-        note = ("Antigravity finished. Its status is NOT verification of correctness. "
-                "Read the diff and run the project's tests before reporting done.\n" + tree)
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse",
-                                             "additionalContext": note[:_MAX_CONTEXT]}}))
+        if failed:
+            lead = ("Antigravity did NOT succeed (failed, partial, timed_out or busy: read the JSON "
+                    "`status`/`error`). The agent may have edited files before stopping, so inspect "
+                    "the working tree below before retrying or reporting.")
+        else:
+            lead = ("Antigravity finished. Its status is NOT verification of correctness. "
+                    "Read the diff and run the project's tests before reporting done.")
+        note = lead + "\n" + tree
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PostToolUseFailure" if failed else "PostToolUse",
+        "additionalContext": note[:_MAX_CONTEXT]}}))
     return 0
 
 

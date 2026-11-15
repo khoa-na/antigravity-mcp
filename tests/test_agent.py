@@ -94,14 +94,14 @@ class AgentTests(unittest.TestCase):
 
     def test_stdout_logs_are_not_an_answer(self):
         proc = mock.Mock(returncode=0, stdout=b"CLI initialized", stderr=b"")
-        with mock.patch.object(agy_agent.subprocess, "run", return_value=proc):
+        with mock.patch.object(agy_agent, "_run_cli", return_value=proc):
             result, out, err, rc = agy_agent.run_agent("task")
         self.assertEqual(result, "")
         self.assertEqual(out, "CLI initialized")
 
     def test_cli_only_receives_existing_conversation_id(self):
         proc = mock.Mock(returncode=0, stdout=b"", stderr=b"")
-        with mock.patch.object(agy_agent.subprocess, "run", return_value=proc) as run:
+        with mock.patch.object(agy_agent, "_run_cli", return_value=proc) as run:
             agy_agent.run_agent("task", conversation_id="existing")
         args = run.call_args.args[0]
         self.assertEqual(args[args.index("--conversation") + 1], "existing")
@@ -111,7 +111,7 @@ class AgentTests(unittest.TestCase):
         proc = mock.Mock(returncode=0, stdout=b"", stderr=b"")
         for budget, expected in ((900, "890s"), (600, "590s"), (30, "28.5s"),
                                  (2, "1.9s"), (0.001, "0.00095s")):
-            with self.subTest(budget=budget), mock.patch.object(agy_agent.subprocess, "run", return_value=proc) as run:
+            with self.subTest(budget=budget), mock.patch.object(agy_agent, "_run_cli", return_value=proc) as run:
                 agy_agent.run_agent("unused offline prompt", timeout=budget)
                 args = run.call_args.args[0]
                 self.assertEqual(args.count("--print-timeout"), 1)
@@ -140,7 +140,7 @@ class AgentTests(unittest.TestCase):
              mock.patch.object(agy_agent, "swap_account", return_value=True), \
              mock.patch.object(agy_agent.time, "sleep"), \
              mock.patch.object(agy_agent.time, "monotonic", side_effect=[0, 10, 500]), \
-             mock.patch.object(agy_agent.subprocess, "run", side_effect=fake_run):
+             mock.patch.object(agy_agent, "_run_cli", side_effect=fake_run):
             self.assertEqual(agy_agent.ask("unused", timeout=600), "done")
         self.assertEqual([args[args.index("--print-timeout") + 1] for args, _ in calls], ["580s", "95s"])
         self.assertEqual([kw["timeout"] for _, kw in calls], [590, 100])

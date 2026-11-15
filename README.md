@@ -179,17 +179,21 @@ returns a JSON **string**, not a separate MCP structured-content object. It incl
   in `prompt` or `prompt_file`, then independently inspect the diff and run tests.
 
 New calls no longer invent conversation IDs: `--conversation` resumes an **existing**
-CLI conversation. The result echoes an explicitly supplied `conversation_id`; otherwise
-it is `null` because this wrapper cannot yet discover the CLI-generated ID. A `task_id`
-is only a correlation label, not a resumable conversation. Use either an existing
-`conversation_id` or `resume=true`, not both. `resume=true` refers to the CLI's most
-recent conversation, not a workspace-specific session maintained by this server.
+CLI conversation. Each run passes `--output-format json` to `agy` and reads the
+`conversation_id` it prints, so the result carries the ID of the conversation that was
+created or continued (also for `partial`/failed runs when the CLI printed one). If the CLI
+printed none, an explicitly supplied `conversation_id` is echoed, else it is `null`. The
+ID only reports where the run happened; success is still decided by the response file. A
+`task_id` is only a correlation label, not a resumable conversation. Use either an
+existing `conversation_id` or `resume=true`, not both. `resume=true` refers to the CLI's
+most recent conversation, not a workspace-specific session maintained by this server;
+prefer passing the returned `conversation_id`.
 
 `AGY_AGENT_PROFILE`, when set, is stable across calls; random worker subdirectories
 are no longer created. Authenticate that profile before using it. Calls into the CLI
-are serialized **within one server process**, including `ping`; overlapping calls fail
-with `busy`. This does not lock out another server process or a human editor. Avoid
-concurrent writers to the same checkout.
+are serialized across processes (an in-process lock plus a file lock, `AGY_LOCK_FILE`),
+including `ping`; overlapping calls fail with `busy`. This does not lock out a human
+editor or an interactive `agy`. Avoid concurrent writers to the same checkout.
 
 The timeout budget starts before quota preflight and remaining time is passed to each
 CLI attempt. Each attempt explicitly sets `agy --print-timeout` from that remaining
@@ -205,8 +209,11 @@ Python process does not automatically reload the wrapper.
 
 Already-running auth/quota/switcher calls retain their own timeouts;
 this is not a hard wall-clock deadline for all network operations. The 15-second
-heartbeat reports elapsed time only. Background jobs, cancellation of descendant
-processes, and durable task logs are not implemented yet. Quota/auth retries can
+heartbeat reports elapsed time only. Background jobs and durable task logs are not
+implemented. On timeout or exception the whole `agy` process tree is killed (Windows: a
+Job Object with kill-on-close, which also reaps the tree if this process is killed outright;
+POSIX: the process group, with SIGTERM handled by the CLI). After a clean exit nothing the
+CLI left running is touched. Quota/auth retries can
 replay a task when no response file exists; inspect the working tree after failures.
 
 **Security:** coding tools still invoke `agy --dangerously-skip-permissions`.
@@ -238,8 +245,10 @@ same folder, but the `hooks:` frontmatter is a Claude Code feature; elsewhere th
 
 The skill's hooks (they only fire for `antigravity-agent` Bash calls):
 - **PreToolUse** blocks a call that lacks `--timeout` or `--json`.
-- **PostToolUse** injects `git status` / `git diff --stat` and a reminder that success is not
-  verification (for background runs it says the task has not finished yet).
+- **PostToolUse** and **PostToolUseFailure** inject `git status` / `git diff --stat`. After a
+  success the reminder is that success is not verification; after a non-`succeeded` status
+  (which exits 1, so Claude Code reports a *failure* event) it warns that files may be
+  half-edited. For background runs a success event says the task has not finished yet.
 
 The MCP server and the CLI share one result contract (`agy_agent.build_result`) and one
 cross-process lock (`AGY_LOCK_FILE`, default `<tmp>/antigravity-mcp-agent.lock`), so a skill

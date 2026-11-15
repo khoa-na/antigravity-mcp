@@ -9,7 +9,7 @@ Mechanism:
     agy.exe -p "Read in.txt, execute the task, and write your final response to out.txt." --dangerously-skip-permissions
     out.txt --> returned to caller
 """
-import sys, os, time, tempfile, shutil, subprocess, argparse, threading, math, json, uuid, errno
+import sys, os, time, tempfile, shutil, subprocess, argparse, threading, math, json, uuid, errno, signal
 from functools import wraps
 from pathlib import Path
 
@@ -50,11 +50,40 @@ WS_OPT_OUT = {"none", "off", "no", "false", "-", "temp"}
 
 
 class AgentError(RuntimeError):
-    def __init__(self, message, status="failed", exit_code=None, output=""):
+    def __init__(self, message, status="failed", exit_code=None, output="", conversation_id=None):
         super().__init__(message)
         self.status = status
         self.exit_code = exit_code
         self.output = output
+        self.conversation_id = conversation_id
+
+
+class AgentResult(str):
+    """The answer text (compares equal to a plain str) plus the CLI-reported conversation ID."""
+    conversation_id = None
+
+    def __new__(cls, text, conversation_id=None):
+        obj = super().__new__(cls, text)
+        obj.conversation_id = conversation_id
+        return obj
+
+
+def _cli_conversation_id(stdout):
+    """Best-effort: `agy --output-format json` prints {"conversation_id": ..., ...}.
+
+    Never trusted for success/failure (the out-file stays the response contract); only
+    used to report which conversation the run created or continued."""
+    text = (stdout or "").strip()
+    candidates = [text] + [ln.strip() for ln in reversed(text.splitlines()) if ln.strip().startswith("{")]
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except ValueError:
+            continue
+        cid = data.get("conversation_id") if isinstance(data, dict) else None
+        if isinstance(cid, str) and cid.strip():
+            return cid.strip()
+    return None
 
 
 # ponytail: serialize CLI tasks because credentials/profile are shared. Two layers:
@@ -184,6 +213,135 @@ def _env(worker_id=None):
 _WRAP = "Read {infile}, execute the task, and write your final response to {outfile}."
 
 
+# ---- process-tree containment -------------------------------------------------
+# `agy` may start helper processes (language server, shells run by its Bash tool). If only
+# the direct child were killed on timeout/cancel, those would keep running after the
+# cross-process lock is released, so the next task would overlap with them.
+#   Windows: the child gets a Job Object with KILL_ON_JOB_CLOSE. The whole tree dies on
+#            timeout/exception and also if THIS process is killed outright (host stop).
+#   POSIX:   the child is a new session leader; the process group is killed on timeout/
+#            exception (and main() turns SIGTERM into an exception).
+class _WindowsJob:
+    """Job Object that kills every assigned process (and descendants) when closed."""
+    _KILL_ON_JOB_CLOSE = 0x2000
+    _EXTENDED_LIMIT_INFO = 9
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes as wt
+
+        class _Basic(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
+                        ("LimitFlags", wt.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wt.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wt.DWORD), ("SchedulingClass", wt.DWORD)]
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_ulonglong) for n in (
+                "ReadOps", "WriteOps", "OtherOps", "ReadBytes", "WriteBytes", "OtherBytes")]
+
+        class _Extended(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", _Basic), ("IoInfo", _IoCounters),
+                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wt.HANDLE
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wt.LPCWSTR]
+        k32.SetInformationJobObject.argtypes = [wt.HANDLE, ctypes.c_int, ctypes.c_void_p, wt.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wt.HANDLE, wt.HANDLE]
+        k32.TerminateJobObject.argtypes = [wt.HANDLE, wt.UINT]
+        k32.CloseHandle.argtypes = [wt.HANDLE]
+        self._k32 = k32
+        self._info_type = _Extended
+        self._handle = k32.CreateJobObjectW(None, None)
+        if not self._handle:
+            raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+        info = _Extended()
+        info.BasicLimitInformation.LimitFlags = self._KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(self._handle, self._EXTENDED_LIMIT_INFO,
+                                           ctypes.byref(info), ctypes.sizeof(info)):
+            err = ctypes.get_last_error()
+            self.close()
+            raise OSError(err, "SetInformationJobObject failed")
+
+    def assign(self, proc):
+        if not self._k32.AssignProcessToJobObject(self._handle, int(proc._handle)):
+            import ctypes
+            raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
+
+    def terminate(self):
+        self._k32.TerminateJobObject(self._handle, 1)
+
+    def release(self):
+        """Stop killing on close: used after a clean exit so survivors are left alone."""
+        import ctypes
+        info = self._info_type()
+        self._k32.SetInformationJobObject(self._handle, self._EXTENDED_LIMIT_INFO,
+                                          ctypes.byref(info), ctypes.sizeof(info))
+
+    def close(self):
+        if self._handle:
+            self._k32.CloseHandle(self._handle)
+            self._handle = None
+
+
+def _kill_tree(proc, job=None):
+    try:
+        if job is not None:
+            job.terminate()
+        elif sys.platform == "win32":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=15)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _run_cli(args, *, input=None, cwd=None, env=None, timeout=None, creationflags=0):
+    """Drop-in for subprocess.run(capture_output=True) that never leaves descendants behind
+    on timeout, exception or (Windows) parent death."""
+    popen_kw = {}
+    job = None
+    if sys.platform == "win32":
+        try:
+            job = _WindowsJob()
+        except OSError as e:
+            log(f"job object unavailable, falling back to taskkill: {e}")
+    else:
+        popen_kw["start_new_session"] = True
+    proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            cwd=cwd, env=env, creationflags=creationflags, **popen_kw)
+    try:
+        if job is not None:
+            try:
+                job.assign(proc)
+            except OSError as e:
+                log(f"could not assign agy to job object, falling back to taskkill: {e}")
+                job.close()
+                job = None
+        try:
+            out, err = proc.communicate(input=input, timeout=timeout)
+        except BaseException:      # TimeoutExpired, KeyboardInterrupt, SystemExit (SIGTERM), ...
+            _kill_tree(proc, job)
+            try:
+                proc.communicate(timeout=10)
+            except (subprocess.TimeoutExpired, OSError, ValueError):
+                pass
+            raise
+        if job is not None:
+            job.release()  # clean exit: do not kill anything the CLI left running on purpose
+        return subprocess.CompletedProcess(args, proc.returncode, out, err)
+    finally:
+        if job is not None:
+            job.close()    # on timeout/exception/parent death KILL_ON_JOB_CLOSE reaps the tree
+
+
 def _cli_print_timeout(timeout):
     """Go-duration string within the outer budget, reserving up to 10s for exit/readback.
 
@@ -211,7 +369,8 @@ def run_agent(prompt, model=None, workspace=None, resume=False, conversation_id=
         Path(infile).write_text(prompt, encoding="utf-8")
         wrapped = _WRAP.format(infile=infile, outfile=outfile)
         args = [AGY_EXE, "-p", wrapped, "--dangerously-skip-permissions",
-                "--print-timeout", _cli_print_timeout(timeout)]
+                "--print-timeout", _cli_print_timeout(timeout),
+                "--output-format", "json"]   # stdout then carries conversation_id (see _cli_conversation_id)
         if model:
             args += ["--model", model]
         if workspace:
@@ -224,9 +383,8 @@ def run_agent(prompt, model=None, workspace=None, resume=False, conversation_id=
             args += ["--effort", str(effort)]
 
         try:
-            p = subprocess.run(
-                args, input=b"", capture_output=True,
-                cwd=tmp, env=_env(worker_id), timeout=timeout,
+            p = _run_cli(
+                args, input=b"", cwd=tmp, env=_env(worker_id), timeout=timeout,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
             )
             out = p.stdout.decode("utf-8", "replace")
@@ -276,6 +434,7 @@ def ask(prompt, model=None, system=None, workspace=None, resume=False, conversat
     swaps = 0
     auth_refreshes = 0
     last = ""
+    cid = None   # conversation ID reported by the CLI (newest attempt wins)
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -285,10 +444,12 @@ def ask(prompt, model=None, system=None, workspace=None, resume=False, conversat
             resume=resume, conversation_id=conversation_id, effort=effort,
             worker_id=worker_id, timeout=remaining
         )
+        cid = _cli_conversation_id(out) or cid
         if result and rc == 0:
-            return result
+            return AgentResult(result, cid)
         if result:
-            raise AgentError(f"agy agent returned partial output (rc={rc}): {err[-300:]}", status="partial", exit_code=rc, output=result)
+            raise AgentError(f"agy agent returned partial output (rc={rc}): {err[-300:]}", status="partial",
+                             exit_code=rc, output=result, conversation_id=cid)
 
         blob = ((err or "") + "\n" + (out or "")).lower()
         last = err or out or f"rc={rc}"
@@ -296,7 +457,7 @@ def ask(prompt, model=None, system=None, workspace=None, resume=False, conversat
         # The CLI may reach its own print deadline before Python's hard deadline.
         if "timeout waiting for response" in blob:
             raise AgentError(f"agy CLI print deadline reached: {last[-400:]}",
-                             status="timed_out", exit_code=rc)
+                             status="timed_out", exit_code=rc, conversation_id=cid)
 
         # Reactive: quota exhaustion
         if _HAS_ROTATION and swaps < MAX_SWAPS and any(m in blob for m in _QUOTA_MARKERS):
@@ -317,14 +478,16 @@ def ask(prompt, model=None, system=None, workspace=None, resume=False, conversat
                         continue
                 except Exception as e:
                     log(f"force-refresh failed: {e}")
-            raise AgentError(f"agy agent: auth required (login/token). {last[-300:]}", exit_code=rc)
+            raise AgentError(f"agy agent: auth required (login/token). {last[-300:]}", exit_code=rc,
+                             conversation_id=cid)
 
         if err == "timeout":
             raise AgentError(f"agy agent timed out after {timeout}s", status="timed_out", exit_code=rc)
         if any(m in blob for m in _LAUNCH_MARKERS):
-            raise AgentError(f"agy agent could not launch: {last[-300:]}", exit_code=rc)
+            raise AgentError(f"agy agent could not launch: {last[-300:]}", exit_code=rc, conversation_id=cid)
 
-        raise AgentError(f"agy agent produced no out-file (rc={rc}): {last[-400:] or 'empty stderr'}", exit_code=rc)
+        raise AgentError(f"agy agent produced no out-file (rc={rc}): {last[-400:] or 'empty stderr'}",
+                         exit_code=rc, conversation_id=cid)
 
 
 # ---- shared helpers (used by the MCP server and the CLI/skill) --------------
@@ -435,6 +598,8 @@ def main(argv=None):
     if not prompt or not prompt.strip():
         ap.error("empty prompt")
 
+    if hasattr(signal, "SIGTERM"):   # turn a host stop into SystemExit so _run_cli kills the tree
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     task_id = uuid.uuid4().hex[:6]
     started = time.monotonic()
     error = None
@@ -447,18 +612,22 @@ def main(argv=None):
         error, raw = e, e.output
     except Exception as e:  # keep the contract: always a status record in --json mode
         error = AgentError(str(e))
+    conversation_id = (getattr(raw, "conversation_id", None) or (error.conversation_id if error else None)
+                       or a.conversation)
     response = handle_large_output(raw, workspace, force_artifact=a.save_artifact) if raw else ""
 
     if a.json:
         print(json.dumps(build_result(
             status=error.status if error else "succeeded", task_id=task_id,
-            conversation_id=a.conversation, resume=a.resume, workspace=workspace,
+            conversation_id=conversation_id, resume=a.resume, workspace=workspace,
             model=a.model, exit_code=error.exit_code if error else 0,
             elapsed_seconds=time.monotonic() - started, response=response,
             error=str(error) if error else None), ensure_ascii=False))
     else:
         if error:
             log(f"{error.status}: {error}")
+        if conversation_id:
+            log(f"conversation_id: {conversation_id}")
         if response:
             print(response)
     sys.stdout.flush()

@@ -16,6 +16,12 @@ hooks:
         - type: command
           if: "Bash(antigravity-agent *)"
           command: antigravity-agent-hook post
+  PostToolUseFailure:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          if: "Bash(antigravity-agent *)"
+          command: antigravity-agent-hook post
 ---
 
 # Antigravity coding agent
@@ -48,7 +54,9 @@ Write the prompt to a file (long prompts break shell quoting) and include:
 4. Acceptance checks it should run itself (e.g. the test command).
 
 ## Run it
-Always pass `--timeout` and `--json` (a hook blocks the call otherwise).
+Always pass `--timeout` and `--json` (a hook blocks the call otherwise). A status other than
+`succeeded` makes the command exit 1, so your shell tool will report it as a failed command:
+read the JSON on stdout rather than assuming nothing happened.
 
 ```bash
 antigravity-agent --prompt-file /path/to/prompt.md --workspace . --timeout 900 --json
@@ -77,12 +85,14 @@ Stdout is one JSON object. Exit code is 0 only for `succeeded`.
 | `busy` | another Antigravity run holds the lock | Wait, then retry once. |
 
 `response` may be a preview if the reply was large; the full text path is in it.
-`conversation_id` is `null` for new runs (the CLI's generated ID cannot be discovered).
+`conversation_id` is the ID the CLI created or continued (it can be `null` only if the CLI printed
+none). Keep it if you may need a follow-up.
 
 ## Follow-ups
-- `--resume` continues the CLI's **most recent** conversation (global, not per repo). Use it
-  only right after your own run, with nothing else using Antigravity in between.
-- `--conversation <id>` resumes a specific existing ID, if the user gave you one.
+- Prefer `--conversation <conversation_id>` using the ID from the previous result. It is exact
+  and survives other Antigravity use in between.
+- `--resume` continues the CLI's **most recent** conversation (global, not per repo); use it only
+  when you do not have the ID and nothing else used Antigravity since.
 - Never pass both.
 
 ## Always verify yourself

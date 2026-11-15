@@ -171,6 +171,26 @@ class HookTests(unittest.TestCase):
         self.assertIn("M app.py", payload["additionalContext"])
         self.assertIn("NOT verification", payload["additionalContext"])
 
+    def test_post_failure_event_warns_about_partial_edits(self):
+        # Non-succeeded runs exit 1, which Claude Code reports as PostToolUseFailure.
+        out = io.StringIO()
+        event = {**self.event("antigravity-agent --timeout 9 --json x", run_in_background=True),
+                 "hook_event_name": "PostToolUseFailure"}
+        with mock.patch.object(agy_hooks, "_git", side_effect=[" M half.py", ""]), \
+             contextlib.redirect_stdout(out):
+            self.assertEqual(agy_hooks.post(event), 0)
+        payload = json.loads(out.getvalue())["hookSpecificOutput"]
+        self.assertEqual(payload["hookEventName"], "PostToolUseFailure")
+        self.assertIn("did NOT succeed", payload["additionalContext"])
+        self.assertIn("M half.py", payload["additionalContext"])
+
+    def test_skill_wires_every_event_the_hook_handles(self):
+        text = (ROOT / ".claude/skills/antigravity/SKILL.md").read_text(encoding="utf-8")
+        frontmatter = text.split("---")[1]
+        for event, mode in (("PreToolUse", "pre"), ("PostToolUse", "post"), ("PostToolUseFailure", "post")):
+            with self.subTest(event=event):
+                self.assertRegex(frontmatter, rf"{event}:\n(?:.*\n)*?\s+command: antigravity-agent-hook {mode}\n")
+
     def test_post_ignores_other_commands_and_main_rejects_bad_usage(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
