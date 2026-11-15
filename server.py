@@ -50,19 +50,13 @@ mcp = MCPServer(
 )
 
 DEFAULT_WORKSPACE = os.environ.get("AGY_DEFAULT_WORKSPACE", os.getcwd())
-WS_OPT_OUT = {"none", "off", "no", "false", "-", "temp"}
-DEFAULT_MAX_INLINE_LINES = int(os.environ.get("AGY_MAX_INLINE_LINES", "350"))
-DEFAULT_MAX_INLINE_CHARS = int(os.environ.get("AGY_MAX_INLINE_CHARS", "16000"))
+
+# Shared with the CLI/skill entry point (agy_agent.main) so both return identical results.
+handle_large_output = agy_agent.handle_large_output
 
 
 def resolve_workspace(w: str | None = None) -> str | None:
-    t = str(w or "").strip() or str(DEFAULT_WORKSPACE or "").strip()
-    if not t or t.lower() in WS_OPT_OUT:
-        return None
-    path = Path(t).expanduser().resolve()
-    if not path.is_dir():
-        raise ValueError(f"Workspace is not an existing directory: {path}")
-    return str(path)
+    return agy_agent.resolve_workspace(w, DEFAULT_WORKSPACE)
 
 
 def strip_bom(s: str) -> str:
@@ -98,44 +92,6 @@ def resolve_input(
             raise FileNotFoundError(f"system_file not found: {system_file}")
 
     return final_prompt, final_system, cleanup_files
-
-
-def handle_large_output(
-    text: str,
-    workspace: str | None,
-    max_lines: int = DEFAULT_MAX_INLINE_LINES,
-    max_chars: int = DEFAULT_MAX_INLINE_CHARS,
-    force_artifact: bool = False
-) -> str:
-    """Save excessively large outputs to an artifact file to prevent context window bloat."""
-    lines = text.splitlines()
-    if not force_artifact and max_lines > 0 and len(lines) <= max_lines and len(text) <= max_chars:
-        return text
-
-    # Destination directory
-    ws_path = Path(workspace) if workspace else Path(os.getcwd())
-    artifact_dir = ws_path / ".antigravity" / "artifacts"
-    try:
-        artifact_dir.mkdir(parents=True, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        filename = f"response_{ts}_{uuid.uuid4().hex[:4]}.md"
-        out_file = artifact_dir / filename
-        out_file.write_text(text, encoding="utf-8")
-
-        preview_lines = lines[:40]
-        preview_text = "\n".join(preview_lines)[:min(max_chars, 4000) if max_chars > 0 else 4000]
-        return (
-            f"[Response exceeds threshold ({len(lines)} lines / {len(text)} chars). "
-            f"Full content saved to artifact]\n"
-            f"Artifact File: {out_file.as_posix()}\n\n"
-            f"--- Preview (First 40 lines) ---\n"
-            f"{preview_text}\n"
-            "\n... [See artifact file for full output] ..."
-        )
-    except Exception as e:
-        # Fallback to inline if saving artifact fails
-        agy_agent.log("Failed to save artifact:", e)
-        return text
 
 
 async def _run_with_telemetry(func, ctx: Context | None = None, label: str = "Antigravity"):
@@ -252,19 +208,12 @@ async def ask_antigravity(
             raw_result = exc.output
         formatted = handle_large_output(raw_result, ws, force_artifact=save_artifact)
         if result_format == "json":
-            return json.dumps({
-                "status": error.status if error else "succeeded",
-                "task_id": worker_id,
-                "conversation_id": session_conv_id,
-                "resume_latest": resume,
-                "workspace": ws,
-                "model": model or agy_agent.DEFAULT_MODEL,
-                "exit_code": error.exit_code if error else 0,
-                "elapsed_seconds": round(time.monotonic() - started, 3),
-                "verification": "not_run_by_wrapper",
-                "response": formatted,
-                "error": str(error) if error else None,
-            }, ensure_ascii=False)
+            return json.dumps(agy_agent.build_result(
+                status=error.status if error else "succeeded", task_id=worker_id,
+                conversation_id=session_conv_id, resume=resume, workspace=ws, model=model,
+                exit_code=error.exit_code if error else 0,
+                elapsed_seconds=time.monotonic() - started,
+                response=formatted, error=str(error) if error else None), ensure_ascii=False)
         return f"Antigravity ({model or agy_agent.DEFAULT_MODEL}) response:\n{formatted}"
     finally:
         for cf in cleanup_files:

@@ -29,6 +29,8 @@ dependencies = [
 [project.scripts]
 antigravity-mcp = "server:main"
 antigravity-doctor = "doctor:main"
+antigravity-agent = "agy_agent:main"
+antigravity-agent-hook = "agy_hooks:main"
 
 [tool.setuptools]
-py-modules = ["server", "agy_agent", "agy_backend", "doctor"]
+py-modules = ["server", "agy_agent", "agy_backend", "agy_hooks", "doctor"]

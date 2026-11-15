@@ -219,6 +219,36 @@ and untracked files are not part of the diff.
 
 ---
 
+## Use as a Claude Code skill (no MCP server)
+
+The same agent is available without any MCP configuration. `pip install -e .` (or
+`uv pip install -e .`) provides three commands on `PATH`:
+
+| Command | Purpose |
+|---|---|
+| `antigravity-agent` | Run the agent once. Flags: `--prompt-file`, `--workspace`, `--model`, `--effort`, `--timeout`, `--resume` / `--conversation`, `--json`, `--save-artifact`. Exit code 0 only for `succeeded`. |
+| `antigravity-agent-hook` | Claude Code hook handler (`pre` / `post`) used by the skill. |
+| `antigravity-doctor` | Offline environment check. |
+
+The skill lives in [`.claude/skills/antigravity/SKILL.md`](.claude/skills/antigravity/SKILL.md)
+and is picked up automatically inside this repo. To use it in every project, copy that
+folder to `~/.claude/skills/antigravity/`. Other harnesses that read `SKILL.md` can use the
+same folder, but the `hooks:` frontmatter is a Claude Code feature; elsewhere the skill's
+"always verify yourself" steps are the only safeguard.
+
+The skill's hooks (they only fire for `antigravity-agent` Bash calls):
+- **PreToolUse** blocks a call that lacks `--timeout` or `--json`.
+- **PostToolUse** injects `git status` / `git diff --stat` and a reminder that success is not
+  verification (for background runs it says the task has not finished yet).
+
+The MCP server and the CLI share one result contract (`agy_agent.build_result`) and one
+cross-process lock (`AGY_LOCK_FILE`, default `<tmp>/antigravity-mcp-agent.lock`), so a skill
+call and an MCP call cannot run the agent at the same time; the loser gets `status: "busy"`.
+Run long tasks in the background: shell tools have their own timeout (Claude Code Bash:
+2 min default, 10 min max), independent of `--timeout`.
+
+---
+
 ## Dual-Mode CLI
 
 `antigravity-mcp` is not only an MCP server; it is also a standalone CLI tool you can use directly from PowerShell, CMD, or Bash without needing an MCP client!
