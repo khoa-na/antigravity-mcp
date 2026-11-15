@@ -56,7 +56,7 @@ are the only safeguard.
 Three hooks (Claude Code only) fire for `agy -p ...` Bash calls. They are plain bash in the skill's
 frontmatter (`shell: bash`, reading the event JSON on stdin), so there is nothing to install. Each
 script also re-checks that the command really is an `agy -p` call, because the `if:` filter was
-seen once to let through an unrelated multi-line Python command, which the guard then wrongly blocked:
+seen twice to let through an unrelated multi-line Python command, which the guard then wrongly blocked:
 
 - **PreToolUse** blocks a call without `--print-timeout` or `--output-format`. (In a headless test
   it caught the model forgetting `--print-timeout` on its first attempt.)

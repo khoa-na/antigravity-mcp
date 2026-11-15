@@ -161,6 +161,7 @@ Stdout is one JSON object (do not scrape anything else). With the reply format a
 | `response` | the agent's final reply: your short report (partial if it was cut off) |
 | `error`, `finished_reason` | why it failed, e.g. `print_timeout`, `error` |
 | `conversation_id` | keep it for follow-ups (empty if it failed before starting) |
+| `duration_seconds` | **not** this run's time when you use `--conversation`: in a 6-step test it read 38, 88, 163, 246, 323 and 2745 s while each call really took 33-86 s (it looks like time since the conversation began). Time the call yourself. |
 
 Exit code: `0` success, `1` error (bad model, auth, ...), `2` usage error (unknown or stray
 argument: **no JSON is printed**, only a message on stderr), `3` print timeout (partial). A
