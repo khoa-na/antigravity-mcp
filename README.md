@@ -1,17 +1,27 @@
 # antigravity skill
 
 A Claude Code **skill** that lets Claude delegate a bounded coding task to the **Google
-Antigravity agent** (Gemini via the `agy` CLI) by running `agy -p` directly. There is no
-server, no MCP configuration and no Python package: the whole project is one `SKILL.md`.
+Antigravity agent** (Gemini via the `agy` CLI) by running `agy -p` as a **background worker**.
+There is no server, no MCP configuration, no Python package and no Claude sub-agent in between:
+the project is one `SKILL.md` plus prompt templates. The fork-like features come from the `agy`
+CLI itself:
+
+| You want | How `agy` gives it |
+|---|---|
+| Runs while you keep talking to Claude | Bash `run_in_background`; Claude is notified when it exits |
+| A clean main context | The brief makes `agy` end with a short (<= 15 lines) report; only that is read |
+| Several workers at once | One run per directory or worktree (different directories work in parallel) |
+| Isolated changes | `git worktree`: the worker edits a throwaway checkout until you accept it |
+| Follow-up with the worker's memory | `--conversation <id>` (the ID is in the JSON result) |
+| An independent check | A second, read-only `agy` run on the diff (deny rules enforced by `agy`) |
 
 ```text
-you ── "ask Antigravity to ..." / /antigravity <task> ──► Claude Code
-                                                            │ reads SKILL.md
+you ── "ask Antigravity to ..." / /antigravity <task> ──► Claude Code (reads SKILL.md)
+                                                            │ writes the brief, then (background):
+                    cd <repo or worktree> && agy -p "..." --output-format json --print-timeout ...
+                                                            │ short JSON result + completion notice
                                                             ▼
-                      cd <repo> && agy -p "..." --output-format json --print-timeout ...
-                                                            │ one JSON object on stdout
-                                                            ▼
-                                       Claude reads it, then verifies git diff + tests itself
+          Claude checks git diff + tests itself, optionally a read-only agy review, then reports
 ```
 
 ## Install
@@ -23,34 +33,49 @@ you ── "ask Antigravity to ..." / /antigravity <task> ──► Claude Code
    `~/.claude/skills/antigravity/`.
 3. Say "ask Antigravity to ..." or type `/antigravity <task>`.
 
-Nothing else to install. Other harnesses that read `SKILL.md` can use the same folder; the
-`hooks:` frontmatter is a Claude Code feature, so elsewhere the skill's "always verify yourself"
-steps are the only safeguard.
+Nothing else to install. Other harnesses that read `SKILL.md` can reuse the instructions, but the
+`hooks:` frontmatter is a Claude Code feature; elsewhere the skill's "always verify yourself" steps
+are the only safeguard.
 
 ## What it does
 
 [`SKILL.md`](.claude/skills/antigravity/SKILL.md) tells Claude how to:
 
-- brief the agent (task, file scope, constraints, acceptance checks; templates in
-  [`references/prompts.md`](.claude/skills/antigravity/references/prompts.md));
-- run `agy -p` **in the target repo**, so the repo is the agent's working directory, with
-  `--output-format json`, an explicit `--print-timeout`, and in the background when it may outlive
-  the shell tool's limit;
-- read the JSON result and exit code, and continue a conversation with `--conversation <id>`;
-- do a **read-only review** that `agy` itself enforces (deny rules block every file write and shell
-  command, even under `--dangerously-skip-permissions`);
+- brief the agent (task, file scope, constraints, acceptance checks, and the short reply format;
+  templates in [`references/prompts.md`](.claude/skills/antigravity/references/prompts.md));
+- run `agy -p` **in the target repo or worktree**, so it is the agent's working directory, with
+  `--output-format json` and an explicit `--print-timeout`, in the background;
+- run risky or parallel work in an **isolated `git worktree`**, and bring it back only after review;
+- read the JSON result and exit code, and continue with `--conversation <id>` (also after a print
+  timeout);
+- get a **second opinion**: a separate read-only `agy` run on the diff, enforced by deny rules that
+  block every file write and shell command even under `--dangerously-skip-permissions`;
 - show the remaining quota with `agy -p "/quota"` (answered by the CLI, no model call);
-- verify the result itself (`git status`, `git diff`, run the tests) instead of trusting
-  "SUCCESS".
+- verify the result itself (`git status`, `git diff`, run the tests) instead of trusting "SUCCESS".
 
 Three hooks (Claude Code only) fire for `agy -p ...` Bash calls. They are plain bash in the skill's
 frontmatter (`shell: bash`, reading the event JSON on stdin), so there is nothing to install:
 
-- **PreToolUse** blocks a call without `--print-timeout` or `--output-format`.
+- **PreToolUse** blocks a call without `--print-timeout` or `--output-format`. (In a headless test
+  it caught the model forgetting `--print-timeout` on its first attempt.)
 - **PostToolUse** reminds Claude to inspect the tree; for a call started with `run_in_background`
   it says the run has *not finished* yet. It stays silent for `/quota` and `/usage`.
 - **PostToolUseFailure** fires after a non-zero exit (error, print timeout), because such a run may
   have left half-edited files.
+
+Measured (headless, real `agy`, main model Sonnet 5.5): an isolated-worktree task plus a read-only
+`agy` review took 19 turns and about $0.30 on the Claude side; the worker needed about 40 s, the main
+checkout stayed untouched, and the result matched an independent `git diff` and test run. Here the
+main model does the orchestration, so the Claude-side cost depends on which model you run.
+
+A second end-to-end test used the **Gemini 4 Hydrogen** model (`gemini-4-hydrogen-medium`) through the
+skill: it built a small module (`textstats.py` with a CLI and 8 unit tests, then a `--min-length`
+option and 3 more tests, 30-40 s per run). Every result matched an independent `git diff`, test run
+and CLI check, a read-only Hydrogen review approved it, two workers ran in parallel in separate
+worktrees, a `--conversation` follow-up remembered its earlier work, and the patch-back and cleanup
+recipes worked. The test also caught a real bug in an earlier version of the skill: with
+`--add-dir` the worker wrote its files outside the worktree while reporting success; the
+independent verification step caught it.
 
 ## How `agy -p` behaves (verified)
 
@@ -59,7 +84,7 @@ frontmatter (`shell: bash`, reading the event JSON on stdin), so there is nothin
 | Output | `--output-format json` prints `{conversation_id, status, response, error, finished_reason, usage, ...}` on stdout. |
 | Exit codes | `0` success, `1` error (bad model, auth, ...), `2` usage error (no JSON), `3` print timeout (partial response). |
 | Timeout | `--print-timeout` defaults to `0`, which waits forever: always pass it. |
-| Working directory | The directory you start `agy` in. Starting it in the repo makes the repo the agent's cwd. |
+| Working directory | The directory you start `agy` in, **unless you pass `--add-dir`**: that re-roots the agent's cwd to the added directory (tested). So the skill never uses `--add-dir`; under `--dangerously-skip-permissions` the agent reads briefs and diffs stored outside the repo anyway. |
 | Permissions | Headless mode cannot prompt. In a workspace `agy` does not trust, tool calls are auto-denied and the reply is empty, so tasks need `--dangerously-skip-permissions` (or an allow-rule / a trusted workspace in `~/.gemini/antigravity-cli/settings.json`, which is yours to configure). |
 | Deny rules | `--settings '{"permissions":{"deny":["command(*)","write_file(*)"]}}'` still blocks shell commands and every file write/edit **under** `--dangerously-skip-permissions`. Only these two rules were tested. |
 | Slash commands | Some run in print mode without a model call: `-p "/quota"` (alias `/usage`) prints the remaining limits. In Git Bash on Windows set `MSYS_NO_PATHCONV=1` or the leading `/` is rewritten into a path. |
@@ -96,6 +121,13 @@ Both are removed: `agy -p --output-format json` now provides the result record, 
 conversation ID itself, starting it in the repo fixes the working directory, `/quota` replaces the
 quota command, and deny rules replace the old text-only review backend. To get the old
 code back, check out the commit before this change (`git log --oneline -- server.py agy_agent.py`).
+
+A forked variant was also tried and dropped: `context: fork` with a custom Haiku subagent that only
+drives `agy` and reports back. It works (about $0.006 on a small task, report matched the real
+diff), but it needs a second file, the subagent cannot see the conversation or ask questions, and
+hooks declared in a *skill's* frontmatter do not fire inside a fork (they must live in the
+subagent's own frontmatter, where they do). The `agy`-native worker pattern above gives the same
+isolation and background behavior without a Claude model in the middle.
 
 ## License
 
