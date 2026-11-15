@@ -134,6 +134,31 @@ from the repo, verified claims by running code, and reported what it adopted and
 skills' hooks do not interfere: each ignores the other's calls (advisor calls carry `/advisor-` in the
 briefing path).
 
+## Third skill: `dual-advisor`
+
+[`.claude/skills/dual-advisor/SKILL.md`](.claude/skills/dual-advisor/SKILL.md) is for a hard problem
+where you want two different models and one answer: Claude Code's built-in advisor and the Antigravity
+advisor each answer **independently** from the same facts, Claude compares them (verifying factual
+disagreements itself), Claude's advisor is then asked to **merge** them into one recommendation, and
+Antigravity gets one round to say what the merge lost or misstated. The report ends with a merge
+ledger (point, source, kept/changed/dropped, why), the disagreements that could not be settled, what
+was verified, and the caveats. It needs the built-in `advisor` tool (`/advisor <model>`) and the
+`antigravity-advisor` skill, and is meant to be used rarely: it costs several advisor-level calls and
+the briefing leaves the machine.
+
+Independence is the whole point, so the skill enforces an order: a facts-only briefing, frozen before
+either answer is read; Claude's advisor never sees Gemini's answer (and vice versa) until both are
+recorded. Claude's advisor reads the whole transcript while Antigravity reads only the briefing, so
+the two sources are not symmetric, and the report must say so.
+
+First real run, on "how to verify a delegated agent's reports cheaply": the two advisors agreed on the
+core (mechanical per-step checks, a hidden boundary corpus, one cross-model review at the end,
+nothing slow inside hooks) and each added something the other missed. The comparison also surfaced
+two facts neither could check and that were then tested: a `PostToolUse` hook receives the tool's
+`tool_response`, and a `Stop` hook can block the first stop and let the second through
+(`stop_hook_active`) without looping. The final Antigravity round found three real defects in the
+merged plan. The merged protocol is a design; its hooks were not built.
+
 ## How `agy -p` behaves (verified)
 
 | | |
