@@ -28,14 +28,15 @@ you ── "ask Antigravity to ..." / /antigravity <task> ──► Claude Code 
 
 1. Install the Antigravity CLI `agy` and log in once (run `agy` interactively). `agy` must be on
    `PATH`; check with `agy models`.
-2. Make the skill visible to Claude Code. It is picked up automatically inside this repo
-   (`.claude/skills/antigravity/`). To use it in every project, copy that folder to
-   `~/.claude/skills/antigravity/`.
+2. Everything is picked up automatically when Claude Code starts in this repo: the skills in
+   `.claude/skills/`, the session-wide guards in `.claude/settings.json` + `.claude/hooks/`, and the
+   standing instructions in `CLAUDE.md` (see "Keeping the skills alive for a whole session").
 3. Say "ask Antigravity to ..." or type `/antigravity <task>`.
 
-Nothing else to install. Other harnesses that read `SKILL.md` can reuse the instructions, but the
-`hooks:` frontmatter is a Claude Code feature; elsewhere the skill's "always verify yourself" steps
-are the only safeguard.
+To use it in another project, copy the three skill folders, `.claude/hooks/`, the `hooks` block of
+`.claude/settings.json`, and the `CLAUDE.md` section (to `~/.claude/` for every project). Other
+harnesses that read `SKILL.md` can reuse the instructions, but hooks are a Claude Code feature;
+elsewhere the skill's "always verify yourself" steps are the only safeguard.
 
 ## What it does
 
@@ -56,10 +57,12 @@ are the only safeguard.
   decides, with go / finish-this-step / stop thresholds and no retry loops on a quota error;
 - verify the result itself (`git status`, `git diff`, run the tests) instead of trusting "SUCCESS".
 
-Three hooks (Claude Code only) fire for `agy -p ...` Bash calls. They are plain bash in the skill's
-frontmatter (`shell: bash`, reading the event JSON on stdin), so there is nothing to install. Each
-script also re-checks that the command really is an `agy -p` call, because the `if:` filter was
-seen twice to let through an unrelated multi-line Python command, which the guard then wrongly blocked:
+Three hooks (Claude Code only) fire for `agy -p ...` Bash calls. They are bash scripts in
+`.claude/hooks/` registered in `.claude/settings.json`, so they are active from the first command of
+a session, whether or not a skill was invoked (the same scripts guard the advisor skill: calls that
+carry `/advisor-` in the briefing path get the read-only check and the advisor wording). Each script
+also re-checks that the command really starts with `agy -p`, because the `if:` filter was seen twice
+to let through an unrelated multi-line command, which the guard then wrongly blocked:
 
 - **PreToolUse** blocks a call without `--print-timeout` or `--output-format`. (In a headless test
   it caught the model forgetting `--print-timeout` on its first attempt.)
@@ -81,6 +84,32 @@ worktrees, a `--conversation` follow-up remembered its earlier work, and the pat
 recipes worked. The test also caught a real bug in an earlier version of the skill: with
 `--add-dir` the worker wrote its files outside the worktree while reporting success; the
 independent verification step caught it.
+
+## Keeping the skills alive for a whole session
+
+Claude Code can drop or cut a skill's text when it compacts the conversation, and a skill's own
+frontmatter hooks only exist once the skill has been invoked. So the three skills are kept in force by
+four layers, each covering what the others cannot:
+
+| Layer | What it keeps | Survives |
+|---|---|---|
+| `CLAUDE.md` (project root) | Which skills exist, when to use them, the rules that always apply (load the skill with the Skill tool before any `agy -p`, verify, privacy, no `--add-dir`), and the `automatic-advisor` switch | every session start, `--resume`, and compaction (re-read from disk) |
+| `.claude/settings.json` + `.claude/hooks/*.sh` | The guards: block `agy -p` without `--print-timeout` / `--output-format`, require the read-only rules on advisor calls, remind Claude to verify | the whole session from its first command, resume, compaction |
+| The skill texts (`SKILL.md`) | The full procedures | until compaction; restored by the Skill tool |
+| Skill size | Each skill stays well under the 5,000-token budget Claude Code re-attaches after auto-compaction (about 3,600 / 2,600 / 2,500 tokens, estimated), with the hooks moved out of the frontmatter | auto-compaction (documented, not forced here) |
+
+Tested in real Claude Code sessions: a fresh session knew the three skills and the switch's state from
+`CLAUDE.md` without calling any tool; the guard blocked a bare `agy -p` before any skill had been
+invoked; after a real `/compact` (46,732 to 7,938 tokens) the guard still blocked, the skill text was
+gone (the model said so), and the `CLAUDE.md` rule made it reload the skill with the Skill tool before
+running anything, after which it quoted the skill correctly. Not tested: automatic compaction (the
+docs say it re-attaches invoked skills, first 5,000 tokens each, 25,000 in total), and `/clear`.
+
+**Automatic advisor** is a switch in `CLAUDE.md` (`automatic-advisor: off`). Turning it on makes Claude
+consult the Antigravity advisor on its own before substantive work and before declaring done. It is
+off by default because every consult sends a briefing to Google and spends quota.
+
+Hook scripts must keep LF line endings (`.gitattributes` enforces it); a CRLF checkout breaks bash.
 
 ## Choosing the model and reasoning level
 
