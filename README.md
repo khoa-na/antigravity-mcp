@@ -50,7 +50,11 @@ are the only safeguard.
   timeout);
 - get a **second opinion**: a separate read-only `agy` run on the diff, enforced by deny rules that
   block every file write and shell command even under `--dangerously-skip-permissions`;
-- show the remaining quota with `agy -p "/quota"` (answered by the CLI, no model call);
+- check the remaining quota with `agy -p "/quota"` (answered by the CLI, no model call) and read the
+  right bucket for the model it will use: `Gemini Models` (Hydrogen, 3.8 Flash) and
+  `Claude and GPT models` each have a weekly and a 5-hour limit, `Gemini 4 Argon` has a weekly limit
+  only; the lower row decides, with go / finish-this-step / stop thresholds and no retry loops on a
+  quota error;
 - verify the result itself (`git status`, `git diff`, run the tests) instead of trusting "SUCCESS".
 
 Three hooks (Claude Code only) fire for `agy -p ...` Bash calls. They are plain bash in the skill's
@@ -78,6 +82,39 @@ worktrees, a `--conversation` follow-up remembered its earlier work, and the pat
 recipes worked. The test also caught a real bug in an earlier version of the skill: with
 `--add-dir` the worker wrote its files outside the worktree while reporting success; the
 independent verification step caught it.
+
+## Second skill: `antigravity-advisor`
+
+[`.claude/skills/antigravity-advisor/SKILL.md`](.claude/skills/antigravity-advisor/SKILL.md) uses
+Antigravity in the role of Claude Code's built-in *advisor*: a different model gives a second opinion
+on a plan, an approach or finished work, at the same three moments (before substantive work, when
+stuck, before declaring done). It never edits anything: `--settings` deny rules for `command(*)` and
+`write_file(*)` make the run read-only, and a hook refuses an advisor call that lacks them.
+
+Differences from the built-in advisor: it does **not** see the conversation, so Claude writes a short
+curated briefing (goal, facts, the plan under review, what worries it, the question, a reply format).
+That briefing is sent to Google, so the skill forbids secrets, personal data, raw transcripts and
+untrimmed logs, and has Claude say so to the user. It is invoked on the user's request (add a line
+to your CLAUDE.md if you want it automatic). Claude then verifies the advisor's claims before
+relying on them and, on a conflict with its own evidence, makes one reconcile call with
+`--conversation` instead of silently switching.
+
+The advisor checks the matching quota bucket before its first call (Argon: the weekly row only), keeps
+its calls few, and offers a model from another group if Argon is nearly empty. Its model defaults
+to **`gemini-4-argon-high`** (any other model can be named). On the same
+question and briefing, Argon high (about 150 s) overlapped Hydrogen high on the main findings and added
+two more real bugs that reproduced when run: a newline inside an item name splits the CLI `list` line,
+and an item added with quantity 0 can never be removed.
+
+Tested on the finished `inventory` project (33 passing tests, an independent acceptance script and an
+earlier review all green): Gemini 4 Hydrogen (high) found four real bugs none of those had caught
+(`OverflowError` in `total_value` for a huge quantity, exact duplicate JSON keys silently overwritten,
+`-0.0` printed as `-0.00`, unknown JSON keys ignored); all four reproduced when run. A second turn in
+the same conversation kept its memory and re-ranked the findings for a single-user CLI. In a fresh
+Claude Code session the skill produced a briefing without personal data, ran the advisor read-only
+from the repo, verified claims by running code, and reported what it adopted and rejected. The two
+skills' hooks do not interfere: each ignores the other's calls (advisor calls carry `/advisor-` in the
+briefing path).
 
 ## How `agy -p` behaves (verified)
 

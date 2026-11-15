@@ -17,6 +17,9 @@ hooks:
               *) exit 0 ;;
             esac
             case "$input" in
+              *"/advisor-"*) exit 0 ;;
+            esac
+            case "$input" in
               *"--print-timeout"*) ;;
               *) echo "agy -p needs --print-timeout (its default, 0, waits forever). Add e.g. --print-timeout 900s and retry." >&2; exit 2 ;;
             esac
@@ -37,6 +40,9 @@ hooks:
               *) exit 0 ;;
             esac
             case "$input" in
+              *"/advisor-"*) exit 0 ;;
+            esac
+            case "$input" in
               *'\"/quota\"'*|*'\"/usage\"'*|*"'/quota'"*|*"'/usage'"*) exit 0 ;;
             esac
             if printf '%s' "$input" | grep -Eq '"run_in_background"[[:space:]]*:[[:space:]]*true'; then
@@ -55,6 +61,9 @@ hooks:
             case "$input" in
               *"agy -p"*) ;;
               *) exit 0 ;;
+            esac
+            case "$input" in
+              *"/advisor-"*) exit 0 ;;
             esac
             printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUseFailure","additionalContext":"agy did NOT succeed (error, print timeout or killed): the JSON on stdout says which. It may have edited files before stopping, so inspect git status and git diff in the target repo before retrying or reporting."}}'
 ---
@@ -179,9 +188,26 @@ the turn completed, not that the code is right. After `ERROR`/`3` the tree may b
 ```bash
 MSYS_NO_PATHCONV=1 agy -p "/quota" --output-format json --print-timeout 30s
 ```
-Answered by the CLI itself: instant, no model call, no quota spent. `response` is a tab-separated
-table of weekly and 5-hour limits remaining per model group. Check it before a long task, and
-report an exhausted quota instead of retrying.
+Answered by the CLI itself: instant, no model call, no quota spent. `response` is tab-separated:
+group, limit, percent remaining, reset time (UTC). Models share a bucket by group, and quota is
+consumed in proportion to token cost, so long multi-step tasks drain it faster than short ones:
+
+| Model you will use | Rows that matter |
+|---|---|
+| `gemini-4-hydrogen-*`, `gemini-3.8-flash-*` (and the user's configured default if it is one of these) | `Gemini Models`: **both** `Weekly Limit` and `Five Hour Limit`; the lower one decides |
+| `gemini-4-argon-*` | `Gemini 4 Argon Weekly Limit` only (separate bucket on Pro plans) |
+| `claude-*`, `gpt-oss-*` | `Claude and GPT models`: both rows; the lower one decides |
+
+Before a task, and again every two or three steps of a multi-step task, check the row for the model
+you use. Suggested thresholds (this skill's judgement, not `agy`'s): 20% or more, go; 5-20%, finish
+only the current step and tell the user the bucket is low and when it resets; under 5%, stop and
+report the reset time instead of starting another run. A `Five Hour` row refills in at most five
+hours, a weekly one in days, so a low 5-hour bucket usually just means waiting.
+
+If a run ends with `status: ERROR` whose text mentions quota, exhausted, rate limit or 429, treat it
+as a quota failure: run the check, report the reset time, and do not loop retries. The tree may be
+half-edited, so inspect it first. (No exhausted-quota error text was available when this was written,
+so match on meaning, not on an exact string.)
 
 ## Second opinion (read-only `agy` review of the diff)
 A separate `agy` run can check the worker's change without being able to touch anything: deny rules
