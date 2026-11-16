@@ -20,12 +20,23 @@ reviewer. It differs in two ways you must account for:
 Request from the user: $ARGUMENTS
 
 ## Configuration (edit only here)
-The model and reasoning level this skill uses are declared here and nowhere else:
+The model and reasoning level this skill uses are declared here and nowhere else. The user chooses them
+each time (`ask: each-use`); the values below are only the suggested defaults:
 
 ```text
 model:  gemini-4-argon
 effort: high
+ask:    each-use
 ```
+
+- **`ask: each-use`**: the first advisor call of a session, when the user's request does not already
+  name a model and level and `agy-session.json` has no `advisor` flags, ask the user which to use (the
+  ask tool if you have one, otherwise a chat question) before the quota check. Offer the families from
+  `agy models`, the values above as the recommended option (an advisor is normally a stronger model than
+  the worker), and only the levels that exist for the chosen family. Store the answer under `advisor`;
+  later calls reuse it. A change is just different flags on the next call, not a new conversation
+  (verified: the model switches on resume). `ask: never` uses the values above silently. With nobody to
+  ask (a headless run), use the values above and say so.
 
 - `model`: a model family from `agy models` (the ID without its trailing level, for example
   `gemini-4-argon`), a full ID such as `gemini-4-argon-high`, or `default` to use the model configured
@@ -71,7 +82,7 @@ advisor by `/advisor-` in the path). Sections:
 5. **The question(s)**: specific, e.g. "Is approach A or B safer here, and why?" or "Review the
    change in these files for what I missed."
 6. **Constraints**: stack, things not allowed, what the user cares about.
-7. **Reply format** (copy this): "Answer in at most 25 lines: Verdict (agree / agree with changes /
+7. **Reply format** (copy this): "Answer in at most 60 lines: Verdict (agree / agree with changes /
    disagree); Top risks, ranked; What I would do differently; Questions you need answered before you
    can be sure; What you could not check. Be direct. If my plan is wrong, say so. No praise. Cite
    file:line when you read the repo."
@@ -120,6 +131,19 @@ Run it in the foreground (advice is quick and you are waiting on it), in the rep
 ```bash
 cd /abs/path/to/repo && agy -p "You are an expert technical advisor reviewing the work of another engineer. Read C:/abs/tmp/advisor-<id>.md. You may read files in the current directory to check its claims. You cannot and must not edit files or run commands. Follow the reply format in the briefing exactly." <model-flags> --dangerously-skip-permissions --settings '{"permissions":{"deny":["command(*)","write_file(*)"]}}' --output-format json --print-timeout 300s
 ```
+- **Session continuity (this skill is self-contained; CLAUDE.md is optional):** the advisor resumes the
+  SAME conversation as the `antigravity` skill's prime and worker (one per directory), so it already
+  knows the folder. State file: `agy-session.json` in the session's scratchpad directory (none listed:
+  keep it in context only), shaped
+  `{"<abs dir>":{"id":"<conversation_id>","flags":{"worker":"<model-flags>","advisor":"<model-flags>"}}}`.
+  Read it; if the directory has an entry, add `--conversation <id>` with the **advisor** flags and the
+  read-only `--settings` above (both apply per call, verified), and make the briefing a short update
+  (what changed since, the new question), not a repeat. Write the returned `conversation_id` back. No
+  entry: start a new conversation (it has not read the folder, so the briefing must say more). The
+  reconcile call below uses the same conversation. **Never resume while a background worker run on
+  this conversation is still going** (one `agy` process per conversation). Never pass an ID from
+  another directory. Caveat for the report: the history may hold Claude's plans from worker briefs and
+  Gemini's own earlier work, which can colour its answer.
 - Set the Bash `timeout` to 330000 (above `--print-timeout`). Never pass `--add-dir` (it re-roots the
   agent's working directory). On Windows write paths inside the prompt as `C:/Users/...`.
 - Replace `<model-flags>` with the flags built from "Configuration" (`agy models` lists the IDs).

@@ -96,7 +96,7 @@ four layers, each covering what the others cannot:
 | `CLAUDE.md` (project root) | Which skills exist, when to use them, the rules that always apply (load the skill with the Skill tool before any `agy -p`, verify, privacy, no `--add-dir`), and the `automatic-advisor` switch | every session start, `--resume`, and compaction (re-read from disk) |
 | `.claude/settings.json` + `.claude/hooks/*.sh` | The guards: block `agy -p` without `--print-timeout` / `--output-format`, require the read-only rules on advisor calls, remind Claude to verify | the whole session from its first command, resume, compaction |
 | The skill texts (`SKILL.md`) | The full procedures | until compaction; restored by the Skill tool |
-| Skill size | Each skill stays well under the 5,000-token budget Claude Code re-attaches after auto-compaction (about 3,600 / 2,600 / 2,500 tokens, estimated), with the hooks moved out of the frontmatter | auto-compaction (documented, not forced here) |
+| Skill size | Each skill stays well under the 5,000-token budget Claude Code re-attaches after auto-compaction (about 4,500 / 3,200 / 2,450 tokens, estimated from file size; the worker skill is now close to the limit), with the hooks moved out of the frontmatter | auto-compaction (documented, not forced here) |
 
 Tested in real Claude Code sessions: a fresh session knew the three skills and the switch's state from
 `CLAUDE.md` without calling any tool; the guard blocked a bare `agy -p` before any skill had been
@@ -104,6 +104,29 @@ invoked; after a real `/compact` (46,732 to 7,938 tokens) the guard still blocke
 gone (the model said so), and the `CLAUDE.md` rule made it reload the skill with the Skill tool before
 running anything, after which it quoted the skill correctly. Not tested: automatic compaction (the
 docs say it re-attaches invoked skills, first 5,000 tokens each, 25,000 in total), and `/clear`.
+
+**One agy conversation per directory.** Within a Claude Code session the skills keep `agy`'s memory
+instead of starting from zero on every call, and **prime, worker, advisor and `dual-advisor` share one
+conversation per absolute directory**, so Gemini keeps what it read. The intended flow: at session start
+the `antigravity` skill *primes* the conversation (reads the folder read-only, facts only, while Claude
+reads it too); later the same conversation does the coding, and answers as the advisor when a hard
+problem comes up. Each call carries its own flags: `--model`/`--effort` and the read-only `--settings`
+apply per call, also on resume (tested: the target model's own quota bucket dropped only after the call
+that named it, and a write was blocked by deny rules on a conversation that had earlier been allowed
+to write). So the worker runs on one model and the advisor on a stronger one in the same conversation.
+
+Limits that follow from the tests: a conversation is bound to the directory it started in, so a
+**worktree is a new conversation without the primed context** (prime it again, or work in the main
+checkout); only one `agy` process may use a conversation at a time (do not consult the advisor while a
+background worker runs on it, a rule, not tested); and the history can colour Gemini's "independent"
+opinion (briefs that held Claude's plans), which the `dual-advisor` report states. The IDs and the
+flags per role live in `agy-session.json` in the session's scratchpad directory (private to the session,
+survives compaction). The rules are written into the `antigravity` and `antigravity-advisor` skills, so
+`CLAUDE.md` is optional for this feature; it repeats them so they survive a compaction that drops the
+skill text. If you already have your own `CLAUDE.md`, copy just the "One agy conversation per
+directory" section into it, or skip it. This is instruction-only, not enforced by a hook, and has not
+been tested end to end in a real Claude Code session or across a `/compact`; only the `agy` facts above
+were measured.
 
 **Automatic advisor** is a switch in `CLAUDE.md` (`automatic-advisor: off`). Turning it on makes Claude
 consult the Antigravity advisor on its own before substantive work and before declaring done. It is
@@ -119,7 +142,15 @@ instructions:
 ```text
 model:  gemini-4-hydrogen      # the worker skill (the advisor skill ships with gemini-4-argon / high)
 effort: medium
+ask:    each-use
 ```
+
+With `ask: each-use` (the shipped setting) the values above are only **suggested defaults**: whenever a
+new `agy` conversation starts and your request does not name a model and level, Claude asks you which
+to use, for the worker, the advisor and a dual-advisor run alike. Follow-ups in the same conversation
+reuse the stored flags without asking again. Set `ask: never` to use the block silently. Headless runs
+(nobody to ask) fall back to the defaults. This is instruction-only and has not been run in a real
+session yet.
 
 `model` is a family from `agy models` (the ID without its trailing level), a full ID, or `default` for
 the model configured in `agy` itself; `effort` is `low` to `max` or `default`. The skill builds
@@ -167,18 +198,23 @@ briefing path).
 
 [`.claude/skills/dual-advisor/SKILL.md`](.claude/skills/dual-advisor/SKILL.md) is for a hard problem
 where you want two different models and one answer: Claude Code's built-in advisor and the Antigravity
-advisor each answer **independently** from the same facts, Claude compares them (verifying factual
-disagreements itself), Claude's advisor is then asked to **merge** them into one recommendation, and
-Antigravity gets one round to say what the merge lost or misstated. The report ends with a merge
-ledger (point, source, kept/changed/dropped, why), the disagreements that could not be settled, what
-was verified, and the caveats. It needs the built-in `advisor` tool (`/advisor <model>`) and the
-`antigravity-advisor` skill, and is meant to be used rarely: it costs several advisor-level calls and
-the briefing leaves the machine.
+advisor each answer **independently** from the same facts (round 0), then **rebut each other for exactly
+two rounds** (rebuttal 1: each critiques the other's round-0 opinion; rebuttal 2: each answers the
+critique of its own position: defend, concede or revise), Claude verifies factual disputes itself, and
+Claude's advisor finally **merges** everything into one recommendation. In each round a side receives
+only the other side's text from the previous round. The report ends with a merge ledger (point, source,
+kept/changed/dropped, why), what the rebuttals changed, the disagreements that could not be settled,
+what was verified, and the caveats. It needs the built-in `advisor` tool (`/advisor <model>`) and the
+`antigravity-advisor` skill, and is meant to be used rarely: four Claude advisor calls and three
+Antigravity calls on a growing conversation, and the briefings leave the machine.
 
-Independence is the whole point, so the skill enforces an order: a facts-only briefing, frozen before
-either answer is read; Claude's advisor never sees Gemini's answer (and vice versa) until both are
-recorded. Claude's advisor reads the whole transcript while Antigravity reads only the briefing, so
-the two sources are not symmetric, and the report must say so.
+Independence of the first answers is the point of round 0, so the skill enforces an order: a facts-only
+briefing, frozen before either answer is read; `advisor()` is called alone in every round and Claude's
+answer comes first, then the Antigravity command. "At the same time" is therefore not literal (an
+`advisor()` batched with a Bash call returned nothing in a real run), which is safe because each side
+only sees the previous round. Claude's advisor reads the whole transcript while Antigravity reads the
+briefings and its own conversation history, so the two sources are not symmetric, and the report must
+say so. The debate protocol (rounds, shared conversation) is a design: it has not been run end to end.
 
 First real run, on "how to verify a delegated agent's reports cheaply": the two advisors agreed on the
 core (mechanical per-step checks, a hidden boundary corpus, one cross-model review at the end,
@@ -214,6 +250,9 @@ contain `\\` (the first hook rewrite silently did nothing for that reason).
 | Concurrency | Two runs in different directories at once both succeed, each with its own `conversation_id`. |
 | Stopping | Stopping the Claude Code background task killed `agy` and its child process (tested on Windows). On `--print-timeout`, `agy` ends the turn and its background tasks itself and exits 3. |
 | Model | Without `--model`, `agy` uses the model configured in its own settings. |
+| Resume from another directory | `--conversation <id>` keeps the memory but the conversation stays **bound to the directory it started in**: resumed from `dirB`, a file the agent created landed in `dirA` (tested with the file, not just the agent's answer). Never resume across directories or worktrees. |
+| Model and rules on resume | `--model`, `--effort` and `--settings` are per call. Resuming a Flash conversation with `--model gemini-4-argon` dropped Argon's own quota bucket (0.9166 to 0.9065), and a Flash call did not. Deny rules on a resumed conversation blocked a write that an earlier call (without them) had allowed. So one conversation can run a worker and a stronger read-only advisor. |
+| Context growth | Input tokens grew 9.5k, 21.7k, 34.6k, 47k over four trivial turns of one conversation. |
 
 ## Compared with typing `agy` yourself
 

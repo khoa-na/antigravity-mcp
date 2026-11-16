@@ -26,12 +26,23 @@ sub-agent in between:
 Task from the user: $ARGUMENTS
 
 ## Configuration (edit only here)
-The model and reasoning level this skill uses are declared here and nowhere else:
+The model and reasoning level this skill uses are declared here and nowhere else. The user chooses them
+each time (`ask: each-use`); the values below are only the suggested defaults:
 
 ```text
 model:  gemini-4-hydrogen
 effort: medium
+ask:    each-use
 ```
+
+- **`ask: each-use`**: the first time in a session that you use `agy` as worker (or to prime), and the
+  user's request does not already name a model and level, ask the user which to use (the ask tool if you
+  have one, otherwise a chat question) before running. Offer the families from `agy models`, the values
+  above as the recommended option, and only the levels that exist for the chosen family. Store the
+  answer under `worker` in `agy-session.json`; later calls reuse it without asking. The user may change
+  it any time: that is just different flags on the next call, not a new conversation (verified: the
+  model switches on resume). `ask: never` uses the values above silently. With nobody to ask (a
+  headless run), use the values above and say so.
 
 - `model`: a model family from `agy models` (the ID without its trailing level, for example
   `gemini-4-hydrogen`), a full ID such as `gemini-4-hydrogen-medium`, or `default` to use the model
@@ -63,6 +74,18 @@ agy models
 Lists the model IDs (first column) and proves `agy` is installed and logged in. If the command is
 not found or errors, say so and stop; do not guess a path. If it says the account must be verified,
 that is the user's to do.
+
+## Prime: read the folder together (start of a session)
+When the user asks to read or load the folder with Antigravity, read it yourself too, and have `agy`
+build its own picture in the directory's conversation, read-only and facts only:
+
+```bash
+cd /abs/path/to/repo && agy -p "Read this repository: layout, entry points, conventions, how to run the tests, anything fragile. You cannot and must not edit files or run commands. Reply in at most 40 lines of FACTS only: no opinions, no recommendations, no plan." <model-flags> --dangerously-skip-permissions --settings '{"permissions":{"deny":["command(*)","write_file(*)"]}}' --output-format json --print-timeout 600s
+```
+Run it like any other run (background, `<model-flags>` from the worker flags, state file as under
+"Follow-ups"), record the `conversation_id`, then tell the user what it found. Compare its summary with
+what you read; verify any claim you will rely on. Later worker tasks and advisor calls resume this
+conversation. If it is already primed in this session, do not prime again.
 
 ## Brief the agent
 Write the task to a file **outside the repo** (a temp dir; long prompts break shell quoting) with:
@@ -115,7 +138,8 @@ cd /abs/tmp/agy-<id> && agy -p "..." <model-flags> --dangerously-skip-permission
   there. Bring accepted work back only with the user's OK, e.g.
   `git -C /abs/tmp/agy-<id> diff HEAD > /abs/tmp/agy-<id>.patch && git -C /abs/path/to/repo apply /abs/tmp/agy-<id>.patch`.
 - Clean up when the user has accepted or rejected it: `git worktree remove --force /abs/tmp/agy-<id>`
-  and `git branch -D agy/<id>`. Several workers = several worktrees, each with its own run.
+  and `git branch -D agy/<id>` (and delete that directory's entry in `agy-session.json`). Several
+  workers = several worktrees, each with its own run and its own conversation.
 
 ## Read the result
 Stdout is one JSON object (do not scrape anything else). With the reply format above it is small:
@@ -134,11 +158,25 @@ non-zero code makes your shell tool report a failed command: read the JSON anywa
 the turn completed, not that the code is right. After `ERROR`/`3` the tree may be half-edited.
 
 ## Follow-ups
+- **Session continuity (this skill is self-contained; CLAUDE.md is optional):** ONE conversation per
+  directory, shared by prime, worker and the advisor (`antigravity-advisor`), so Gemini keeps what it
+  read. State file: `agy-session.json` in the session's scratchpad directory (no scratchpad listed: keep
+  it in context only, never a cross-session file), shaped
+  `{"<abs dir>":{"id":"<conversation_id>","flags":{"worker":"<model-flags>","advisor":"<model-flags>"}}}`.
+  Before a run read it; if the directory has an entry, add `--conversation <id>` with the worker flags.
+  After reading the result, write the returned `conversation_id` back (nothing if it is empty). Start
+  fresh only when the user asks for a new agy session, the worktree is removed, or the conversation is
+  too long or its quota low. Input grows every turn, so keep follow-ups short.
+- **One `agy` process per conversation at a time:** never resume it (as worker or advisor) while a
+  background run on it is still going.
+- **Never** pass an ID from a different directory: the conversation stays bound to its original
+  directory (verified), so a worktree would edit the old checkout. A worktree is a new conversation
+  without the primed context (prime it again), and when you remove it, drop its entry.
 - `--conversation <conversation_id>` resumes that exact conversation (preferred: it survives other
   Antigravity use in between). After exit 3, continue with "Continue and finish the task".
 - `--continue` resumes the CLI's **most recent** conversation, global and not per repo. Use it only
   right after your own run.
-- Pass the same `<model-flags>` and safety flags again; each run is a new process.
+- Pass this role's `<model-flags>` and the safety flags again on every call; each run is a new process.
 
 ## Quota
 ```bash
