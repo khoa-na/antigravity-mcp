@@ -149,7 +149,8 @@ Stdout is one JSON object (do not scrape anything else). With the reply format a
 | `status` | `SUCCESS` or `ERROR` |
 | `response` | the agent's final reply: your short report (partial if it was cut off) |
 | `error`, `finished_reason` | why it failed, e.g. `print_timeout`, `error` |
-| `conversation_id` | keep it for follow-ups (empty if it failed before starting) |
+| `conversation_id` | **write it to `agy-session.json` now, every run, even if unchanged** (manual and easy to skip); empty if it failed before starting (write nothing) |
+| `usage.input_tokens` | how long the conversation is. It grew from about 16k after a prime to 244k after a worker, an advisor and three dual-advisor rounds. See "Follow-ups" for when to start fresh. |
 | `duration_seconds` | **not** this run's time when you use `--conversation`: in a 6-step test it read 38, 88, 163, 246, 323 and 2745 s while each call really took 33-86 s (it looks like time since the conversation began). Time the call yourself. |
 
 Exit code: `0` success, `1` error (bad model, auth, ...), `2` usage error (unknown or stray
@@ -165,8 +166,9 @@ the turn completed, not that the code is right. After `ERROR`/`3` the tree may b
   `{"<abs dir>":{"id":"<conversation_id>","flags":{"worker":"<model-flags>","advisor":"<model-flags>"}}}`.
   Before a run read it; if the directory has an entry, add `--conversation <id>` with the worker flags.
   After reading the result, write the returned `conversation_id` back (nothing if it is empty). Start
-  fresh only when the user asks for a new agy session, the worktree is removed, or the conversation is
-  too long or its quota low. Input grows every turn, so keep follow-ups short.
+  fresh only when the user asks for a new agy session, the worktree is removed, the conversation is
+  too long (the last call's `usage.input_tokens` is about 200,000 or more: offer a fresh one and prime
+  again) or its quota low. Input grows every turn, so keep follow-ups short.
 - **One `agy` process per conversation at a time:** never resume it (as worker or advisor) while a
   background run on it is still going.
 - **Never** pass an ID from a different directory: the conversation stays bound to its original

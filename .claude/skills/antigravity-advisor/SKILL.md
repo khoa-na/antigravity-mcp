@@ -149,7 +149,10 @@ cd /abs/path/to/repo && agy -p "You are an expert technical advisor reviewing th
 - Replace `<model-flags>` with the flags built from "Configuration" (`agy models` lists the IDs).
   Check the matching quota bucket first (see "Check the quota first").
 - Stdout is one JSON object: `status` (`SUCCESS`/`ERROR`), `response` (the advice),
-  `conversation_id`, `error`. Exit code 0 is success, 1 error, 2 usage error (no JSON), 3 print
+  `conversation_id`, `error`. **After every call, write `conversation_id` and the advisor flags used
+  back to `agy-session.json` straight away, even if unchanged** (a manual step that is easy to skip).
+  `usage.input_tokens` shows how long the conversation is: about 200,000 or more means offer a fresh
+  one (see the `antigravity` skill, "Follow-ups"). Exit code 0 is success, 1 error, 2 usage error (no JSON), 3 print
   timeout. Do not trust `duration_seconds` as this call's time.
 
 ## Use the advice

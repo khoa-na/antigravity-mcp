@@ -54,7 +54,8 @@ conversation does the coding and acts as the advisor, each call with its own mod
 - **One `agy` process per conversation at a time.** Do not consult the advisor while a background
   worker is resuming the same conversation: wait for it to finish.
 - **Start fresh** (drop the entry) only when the user asks for a new agy session, the worktree is
-  removed, or the conversation has grown too long or its quota is low.
+  removed, or the conversation has grown too long (last `usage.input_tokens` about 200,000 or more) or
+  its quota is low. Writing the ID back after EVERY call is manual: do not skip it.
 - Anchoring caveat: Gemini's earlier history (briefs that held Claude's plans, its own work) can colour
   its later "independent" opinion. State it in the `dual-advisor` report, do not engineer around it.
 - The briefing privacy rule covers the whole conversation. Input grows each turn (9.5k to 47k tokens

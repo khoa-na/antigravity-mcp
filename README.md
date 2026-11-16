@@ -96,7 +96,7 @@ four layers, each covering what the others cannot:
 | `CLAUDE.md` (project root) | Which skills exist, when to use them, the rules that always apply (load the skill with the Skill tool before any `agy -p`, verify, privacy, no `--add-dir`), and the `automatic-advisor` switch | every session start, `--resume`, and compaction (re-read from disk) |
 | `.claude/settings.json` + `.claude/hooks/*.sh` | The guards: block `agy -p` without `--print-timeout` / `--output-format`, require the read-only rules on advisor calls, remind Claude to verify | the whole session from its first command, resume, compaction |
 | The skill texts (`SKILL.md`) | The full procedures | until compaction; restored by the Skill tool |
-| Skill size | Each skill stays well under the 5,000-token budget Claude Code re-attaches after auto-compaction (about 4,500 / 3,200 / 2,450 tokens, estimated from file size; the worker skill is now close to the limit), with the hooks moved out of the frontmatter | auto-compaction (documented, not forced here) |
+| Skill size | Each skill stays well under the 5,000-token budget Claude Code re-attaches after auto-compaction (about 4,650 / 3,250 / 2,550 tokens, estimated from file size; the worker skill is now close to the limit), with the hooks moved out of the frontmatter | auto-compaction (documented, not forced here) |
 
 Tested in real Claude Code sessions: a fresh session knew the three skills and the switch's state from
 `CLAUDE.md` without calling any tool; the guard blocked a bare `agy -p` before any skill had been
@@ -252,7 +252,7 @@ contain `\\` (the first hook rewrite silently did nothing for that reason).
 | Model | Without `--model`, `agy` uses the model configured in its own settings. |
 | Resume from another directory | `--conversation <id>` keeps the memory but the conversation stays **bound to the directory it started in**: resumed from `dirB`, a file the agent created landed in `dirA` (tested with the file, not just the agent's answer). Never resume across directories or worktrees. |
 | Model and rules on resume | `--model`, `--effort` and `--settings` are per call. Resuming a Flash conversation with `--model gemini-4-argon` dropped Argon's own quota bucket (0.9166 to 0.9065), and a Flash call did not. Deny rules on a resumed conversation blocked a write that an earlier call (without them) had allowed. So one conversation can run a worker and a stronger read-only advisor. |
-| Context growth | Input tokens grew 9.5k, 21.7k, 34.6k, 47k over four trivial turns of one conversation. |
+| Context growth | Input tokens grew 9.5k, 21.7k, 34.6k, 47k over four trivial turns of one conversation. In a full skill test (prime, one worker task, one advisor review, a three-round dual-advisor) the shared conversation went from about 16k to 244k input tokens. `duration_seconds` is cumulative (562, 824, 1081 s) while the calls really took about 130 s and 80 s, so time calls yourself. Skills now say: offer a fresh conversation at about 200k. |
 
 ## Compared with typing `agy` yourself
 
