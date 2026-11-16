@@ -53,7 +53,8 @@ conversation does the coding and acts as the advisor, each call with its own mod
   `conversation_id`, and the flags used under that role. Empty ID (failed to start): write nothing.
 - **One `agy` process per conversation at a time.** Do not consult the advisor while a background
   worker is resuming the same conversation: wait for it to finish.
-- **Start fresh** (drop the entry) only when the user asks for a new agy session, the worktree is
+- **Start fresh** (drop the entry's `id`, keep its `flags` so the user is not asked again; delete the
+  whole entry only when the directory itself is gone) only when the user asks for a new agy session, the worktree is
   removed, or the conversation has grown too long (last `usage.input_tokens` about 200,000 or more) or
   its quota is low. Writing the ID back after EVERY call is manual: do not skip it.
 - Anchoring caveat: Gemini's earlier history (briefs that held Claude's plans, its own work) can colour

@@ -168,7 +168,8 @@ the turn completed, not that the code is right. After `ERROR`/`3` the tree may b
   After reading the result, write the returned `conversation_id` back (nothing if it is empty). Start
   fresh only when the user asks for a new agy session, the worktree is removed, the conversation is
   too long (the last call's `usage.input_tokens` is about 200,000 or more: offer a fresh one and prime
-  again) or its quota low. Input grows every turn, so keep follow-ups short.
+  again) or its quota low. Fresh means drop the entry's `id` but keep its `flags`, so the user is not
+  asked again. Input grows every turn, so keep follow-ups short.
 - **One `agy` process per conversation at a time:** never resume it (as worker or advisor) while a
   background run on it is still going.
 - **Never** pass an ID from a different directory: the conversation stays bound to its original

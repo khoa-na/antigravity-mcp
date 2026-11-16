@@ -144,7 +144,9 @@ cd /abs/path/to/repo && agy -p "You are an expert technical advisor reviewing th
   this conversation is still going** (one `agy` process per conversation). Never pass an ID from
   another directory. Caveat for the report: the history may hold Claude's plans from worker briefs and
   Gemini's own earlier work, which can colour its answer.
-- Set the Bash `timeout` to 330000 (above `--print-timeout`). Never pass `--add-dir` (it re-roots the
+- Set the Bash `timeout` to 330000 (above `--print-timeout`). Calls slow down as the conversation
+  grows (one took 242 s of a 300 s limit): once the last `usage.input_tokens` is above about 100,000,
+  use `--print-timeout 540s` and a Bash `timeout` of 570000. Never pass `--add-dir` (it re-roots the
   agent's working directory). On Windows write paths inside the prompt as `C:/Users/...`.
 - Replace `<model-flags>` with the flags built from "Configuration" (`agy models` lists the IDs).
   Check the matching quota bucket first (see "Check the quota first").

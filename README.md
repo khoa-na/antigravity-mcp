@@ -96,7 +96,7 @@ four layers, each covering what the others cannot:
 | `CLAUDE.md` (project root) | Which skills exist, when to use them, the rules that always apply (load the skill with the Skill tool before any `agy -p`, verify, privacy, no `--add-dir`), and the `automatic-advisor` switch | every session start, `--resume`, and compaction (re-read from disk) |
 | `.claude/settings.json` + `.claude/hooks/*.sh` | The guards: block `agy -p` without `--print-timeout` / `--output-format`, require the read-only rules on advisor calls, remind Claude to verify | the whole session from its first command, resume, compaction |
 | The skill texts (`SKILL.md`) | The full procedures | until compaction; restored by the Skill tool |
-| Skill size | Each skill stays well under the 5,000-token budget Claude Code re-attaches after auto-compaction (about 4,650 / 3,250 / 2,550 tokens, estimated from file size; the worker skill is now close to the limit), with the hooks moved out of the frontmatter | auto-compaction (documented, not forced here) |
+| Skill size | Each skill stays well under the 5,000-token budget Claude Code re-attaches after auto-compaction (about 4,650 / 3,300 / 3,350 tokens, estimated from file size; the worker skill is now close to the limit), with the hooks moved out of the frontmatter | auto-compaction (documented, not forced here) |
 
 Tested in real Claude Code sessions: a fresh session knew the three skills and the switch's state from
 `CLAUDE.md` without calling any tool; the guard blocked a bare `agy -p` before any skill had been
@@ -198,15 +198,20 @@ briefing path).
 
 [`.claude/skills/dual-advisor/SKILL.md`](.claude/skills/dual-advisor/SKILL.md) is for a hard problem
 where you want two different models and one answer: Claude Code's built-in advisor and the Antigravity
-advisor each answer **independently** from the same facts (round 0), then **rebut each other for exactly
+advisor each answer **independently** from the same facts (round 0), then **rebut each other for up to
 two rounds** (rebuttal 1: each critiques the other's round-0 opinion; rebuttal 2: each answers the
-critique of its own position: defend, concede or revise), Claude verifies factual disputes itself, and
+critique of its own position: defend, concede or revise). **If they agree earlier, the skill accepts
+it and stops**: after round 0 and after rebuttal 1 it checks for the same decision and the same details
+with nothing left open, and skips the remaining rebuttals (the report says so). Claude verifies factual
+disputes itself, and
 Claude's advisor finally **merges** everything into one recommendation. In each round a side receives
 only the other side's text from the previous round. The report ends with a merge ledger (point, source,
 kept/changed/dropped, why), what the rebuttals changed, the disagreements that could not be settled,
 what was verified, and the caveats. It needs the built-in `advisor` tool (`/advisor <model>`) and the
-`antigravity-advisor` skill, and is meant to be used rarely: four Claude advisor calls and three
-Antigravity calls on a growing conversation, and the briefings leave the machine.
+`antigravity-advisor` skill, and is meant to be used rarely: up to four Claude advisor calls and three
+Antigravity calls on a growing conversation (a full run added about 125k input tokens, so the skill
+wants the conversation under about 75k first, or a fresh one), and the briefings leave the machine.
+Antigravity calls use a 540 s timeout (a round 2 took 242 s of a 300 s limit).
 
 Independence of the first answers is the point of round 0, so the skill enforces an order: a facts-only
 briefing, frozen before either answer is read; `advisor()` is called alone in every round and Claude's
@@ -214,7 +219,9 @@ answer comes first, then the Antigravity command. "At the same time" is therefor
 `advisor()` batched with a Bash call returned nothing in a real run), which is safe because each side
 only sees the previous round. Claude's advisor reads the whole transcript while Antigravity reads the
 briefings and its own conversation history, so the two sources are not symmetric, and the report must
-say so. The debate protocol (rounds, shared conversation) is a design: it has not been run end to end.
+say so. The same applies to a question the session already discussed, which the skill now warns about.
+The debate protocol (rounds, shared conversation) was run end to end twice on a throwaway repo; the
+early-agreement stop has not been run yet.
 
 First real run, on "how to verify a delegated agent's reports cheaply": the two advisors agreed on the
 core (mechanical per-step checks, a hidden boundary corpus, one cross-model review at the end,
